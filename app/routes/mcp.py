@@ -647,6 +647,10 @@ def t_fix_open_bill(db, a):
     try:
         bill = c.get_bill(d.booking.bexio_bill_id)
         if tx or acc or rate:
+            if str(bill.get("status", "")).upper() == "BOOKED":
+                # booked bills do not take changes to lines or exchange rate; back to draft first
+                c.set_bill_status(d.booking.bexio_bill_id, "DRAFT")
+                bill = c.get_bill(d.booking.bexio_bill_id)
             body = c.bill_update_payload(bill)
             for li in body["line_items"]:
                 if tx:
