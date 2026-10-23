@@ -686,6 +686,8 @@ def t_bexio_duplicates(db, a):
       {"tenant": TENANT, "keys": {"type": "array", "items": {"type": "string"}},
        "main": {"type": "object", "additionalProperties": {"type": "integer"}},
        "sales_checked": {"type": "array", "items": {"type": "integer"}, "description": "Kontakt-IDs, bei denen ausserhalb von finance geprüft wurde, dass keine Verkaufsdokumente daran hängen"},
+       "pair": {"type": "object", "properties": {"main_contact_id": {"type": "integer"}, "duplicate_contact_id": {"type": "integer"}},
+                "description": "Einzelnes Duplikat mit abweichendem Namen (wird von der Analyse nicht gefunden) statt der Analyse-Gruppen"},
        "confirm": CONFIRM}, ["tenant"])
 def t_clean_duplicates(db, a):
     from ..services import contact_dedup
@@ -693,7 +695,15 @@ def t_clean_duplicates(db, a):
     t = _tenant(db, a["tenant"])
     c = bx.BexioClient(db, t)
     try:
-        groups = contact_dedup.analyze(db, c, t)
+        if a.get("pair"):
+            m, d = int(a["pair"]["main_contact_id"]), int(a["pair"]["duplicate_contact_id"])
+            rows = []
+            for cid in (m, d):
+                ct = c.get(f"/2.0/contact/{cid}")
+                rows.append({"id": cid, "nr": ct.get("nr"), "name": contact_dedup.contact_name(ct), "used_by_finance": False, **contact_dedup.linked(c, cid)})
+            groups = [{"key": f"pair:{m}:{d}", "main_contact_id": m, "contacts": rows}]
+        else:
+            groups = contact_dedup.analyze(db, c, t)
         if a.get("keys"):
             groups = [g for g in groups if g["key"] in a["keys"]]
         checked = {int(x) for x in (a.get("sales_checked") or [])}
