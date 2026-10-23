@@ -27,6 +27,9 @@ class Tenant(Base):
     bexio_access_token: Mapped[str | None] = mapped_column(Text)
     bexio_token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     bexio_company_name: Mapped[str | None] = mapped_column(String(160))
+    # bexio company_id (aus /userinfo), beim ersten gueltigen Login festgehalten und danach bei
+    # jedem Token-Refresh geprueft. Bleibt auch beim Trennen erhalten.
+    bexio_company_id: Mapped[str | None] = mapped_column(String(40))
     bexio_connected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     # bexio defaults (account ids from the chart of accounts)
