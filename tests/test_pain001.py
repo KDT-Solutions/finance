@@ -50,3 +50,13 @@ def test_build_rejects_qr_iban_without_reference():
     with pytest.raises(ValueError):
         pain001.build(debtor_name="X", debtor_iban="CH9300762011623852957",
                       payments=[pain001.Payment("a", 1, "CHF", "Y", "CH4431999123000889012")])
+
+
+def test_charge_rules():
+    from app.services.pain001 import charge_rule
+
+    assert charge_rule("DE61100800000221061700", "EUR") == ("SEPA", "SLEV")
+    assert charge_rule("CH5580808009285694169", "CHF") == ("", "")
+    assert charge_rule("DE61100800000221061700", "USD") == ("", "")
+    assert charge_rule("HK12345678901234567890", "USD") == ("", "DEBT")
+    assert charge_rule("CN12345678901234567890", "EUR") == ("", "DEBT")

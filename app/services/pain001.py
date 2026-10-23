@@ -62,6 +62,23 @@ def _id(text: str, limit: int = 35) -> str:
     return (t or "X")[:limit]
 
 
+# IBAN countries of the SEPA area (EU/EEA, CH, GB, MC, SM, AD, VA and the territories with their own IBAN prefix)
+SEPA_COUNTRIES = set("""AT BE BG HR CY CZ DK EE FI FR DE GR HU IE IT LV LT LU MT NL PL PT RO SK SI ES SE IS LI NO CH GB MC SM AD VA
+GI GG JE IM AX GF GP MQ RE YT PM BL MF""".split())
+
+
+def charge_rule(iban: str, currency: str) -> tuple[str, str]:
+    """(service level, charge bearer) for a creditor IBAN:
+    EUR to a SEPA country outside CH/LI -> SEPA with SLEV; any country outside the SEPA area -> charges paid by us (DEBT = OUR);
+    domestic and other cases -> bank default (nothing set)."""
+    country = re.sub(r"\s+", "", iban or "").upper()[:2]
+    if country in ("CH", "LI"):
+        return "", ""
+    if country in SEPA_COUNTRIES:
+        return ("SEPA", "SLEV") if (currency or "").upper() == "EUR" else ("", "")
+    return "", "DEBT"
+
+
 def next_bank_day(d: date) -> date:
     """Saturday/Sunday -> Monday (public holidays are adjusted by the bank itself)."""
     from datetime import timedelta
@@ -116,10 +133,16 @@ def build(*, debtor_name: str, debtor_iban: str, payments: list[Payment], execut
             addr = "<PstlAdr>" + "".join(parts) + "</PstlAdr>"
         if not qr and not p.town and iban[:2] not in ("CH", "LI"):
             raise ValueError(f"Adresse (Ort) fehlt für Auslandszahlung: {p.creditor_name}")
+        svc, chrg = charge_rule(iban, p.currency)
+        if svc == "SEPA" and p.reference_type == "QRR":
+            svc, chrg = "", ""
         tx.append(
             "<CdtTrfTxInf>"
             f"<PmtId><InstrId>{escape(_id(f'{msg_id}-{i}'))}</InstrId><EndToEndId>{escape(_id(p.end_to_end_id))}</EndToEndId></PmtId>"
-            f"<Amt><InstdAmt Ccy=\"{escape(p.currency.upper())}\">{p.amount:.2f}</InstdAmt></Amt>"
+            + (f"<PmtTpInf><SvcLvl><Cd>{svc}</Cd></SvcLvl></PmtTpInf>" if svc else "")
+            + f"<Amt><InstdAmt Ccy=\"{escape(p.currency.upper())}\">{p.amount:.2f}</InstdAmt></Amt>"
+            + (f"<ChrgBr>{chrg}</ChrgBr>" if chrg else "")
+            + 
             f"<Cdtr><Nm>{escape(_clean(p.creditor_name, 70))}</Nm>{addr}</Cdtr>"
             f"<CdtrAcct><Id><IBAN>{iban}</IBAN></Id></CdtrAcct>"
             f"{rmt}"
