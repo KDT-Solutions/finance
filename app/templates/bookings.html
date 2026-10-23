@@ -15,8 +15,8 @@
   <td>{{ b.kind }}</td>
   <td class="muted">{{ b.bexio_bill_id or b.bexio_entry_id }} {{ b.bexio_status or '' }}{% if b.paid_at %} · bezahlt {{ b.paid_at.strftime('%d.%m.%y') }}{% endif %}</td>
   <td><span class="state {{ b.status }}">{{ b.status }}</span></td>
-  <td>{% if b.status == 'ok' %}<form method="post" action="/bookings/{{ b.id }}/cancel" class="inline" data-confirm="Buchung {{ b.id }} im Tool als storniert markieren? In bexio wird nichts geändert, die Rechnung/Buchung dort musst du selbst stornieren."><input type="hidden" name="csrf" value="{{ sess.csrf }}"><button class="link">storniert</button></form>
-      {% elif b.status == 'cancelled' %}<form method="post" action="/bookings/{{ b.id }}/restore" class="inline" data-confirm="Stornierung aufheben und Buchung {{ b.id }} wieder als gebucht führen?"><input type="hidden" name="csrf" value="{{ sess.csrf }}"><button class="link">wiederherstellen</button></form>{% endif %}</td>
+  <td>{% if b.status == 'ok' %}<form method="post" action="/bookings/{{ b.id }}/cancel" class="inline" data-confirm="Buchung {{ b.id }} im Tool als storniert markieren? In bexio wird nichts geändert, die Rechnung/Buchung dort musst du selbst stornieren."><input type="hidden" name="csrf" value="{{ sess.csrf }}"><button class="link">Stornieren</button></form>
+      {% elif b.status == 'cancelled' %}<form method="post" action="/bookings/{{ b.id }}/restore" class="inline" data-confirm="Stornierung aufheben und Buchung {{ b.id }} wieder als gebucht führen?"><input type="hidden" name="csrf" value="{{ sess.csrf }}"><button class="link">Wiederherstellen</button></form>{% endif %}</td>
 </tr>
 {% endfor %}
 </tbody></table>

@@ -48,7 +48,7 @@
   <td class="r" data-label="Betrag">{{ r.currency }} {{ '%.2f'|format(r.amount or 0) }}</td>
   <td class="muted" data-label="Zahlfile">{{ r.payment_file }} · {{ r.payment_file_at.strftime('%d.%m.%y %H:%M') if r.payment_file_at }}</td>
   <td data-label="Ticket">{% if r.ticket %}#{{ r.ticket }}{% endif %}</td>
-  <td class="actions-cell"><form method="post" action="/payments/unmark/{{ r.booking_id }}" class="inline" data-confirm="Markierung entfernen? Nur wenn das Zahlfile nicht hochgeladen wurde, sonst wird doppelt bezahlt."><input type="hidden" name="csrf" value="{{ sess.csrf }}"><button class="link">nicht hochgeladen</button></form></td>
+  <td class="actions-cell"><form method="post" action="/payments/unmark/{{ r.booking_id }}" class="inline" data-confirm="Markierung entfernen? Nur wenn das Zahlfile nicht hochgeladen wurde, sonst wird doppelt bezahlt."><input type="hidden" name="csrf" value="{{ sess.csrf }}"><button class="link">Markierung aufheben</button></form></td>
 </tr>
 {% endfor %}
 </tbody></table>
