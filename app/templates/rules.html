@@ -12,12 +12,13 @@
 <thead><tr><th>Mandant</th><th>Lieferant</th><th>Stichwörter</th><th>Konto</th><th>Steuer</th><th>Zahlung</th><th class="r">Band</th><th>Auto</th><th>Treffer</th><th>Quelle</th></tr></thead>
 <tbody>
 {% for r in rows %}
-<tr class="row {{ 'off' if not r.active }}" onclick="location.href='/rules/{{ r.id }}'">
-  <td>{{ r.supplier.tenant_id }}</td>
-  <td>{{ r.supplier.display_name }}</td>
+<tr class="row {{ 'off' if not r.active }}" data-href="/rules/{{ r.id }}">
+  <td>{{ r.tenant.code }}</td>
+  <td><a href="/rules/{{ r.id }}">{{ r.supplier.display_name }}</a></td>
   <td class="muted">{{ r.keywords|join(', ') }}</td>
-  <td>{{ r.account_no or r.account_id or '–' }}</td>
-  <td>{{ r.tax_code or r.tax_id or '–' }}</td>
+  {% set md = r.tenant.master_data or {} %}{% set acc = md.get('accounts', [])|selectattr('id','equalto',r.account_id)|first %}{% set tx = md.get('taxes', [])|selectattr('id','equalto',r.tax_id)|first %}
+  <td>{% if acc %}{{ acc.no }} {{ acc.name }}{% else %}{{ r.account_id or '–' }}{% endif %}</td>
+  <td>{% if tx %}{{ tx.code }}{% else %}{{ r.tax_id or '–' }}{% endif %}</td>
   <td>{{ r.payment_mode }}{% if r.payment_account %} · {{ r.payment_account.label }}{% endif %}</td>
   <td class="r muted">{% if r.amount_min is not none %}{{ '%.0f'|format(r.amount_min) }}–{{ '%.0f'|format(r.amount_max) }}{% endif %}</td>
   <td>{{ 'ja' if r.auto_book else 'nein' }}</td>
