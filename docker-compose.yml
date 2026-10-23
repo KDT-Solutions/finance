@@ -1,0 +1,87 @@
+services:
+  app:
+    image: ghcr.io/kdt-solutions/finance:latest
+    pull_policy: always
+    container_name: finance-app
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      - DATABASE_URL=postgresql+psycopg://finance:${POSTGRES_PASSWORD}@db:5432/finance
+      - SECRET_KEY=${SECRET_KEY}
+      - DATA_ENCRYPTION_KEY=${DATA_ENCRYPTION_KEY}
+      - ADMIN_USER=${ADMIN_USER:-admin}
+      - ADMIN_PASSWORD_HASH=${ADMIN_PASSWORD_HASH}
+      - ADMIN_TOTP_SECRET=${ADMIN_TOTP_SECRET:-}
+      - PUBLIC_BASE_URL=${PUBLIC_BASE_URL}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-claude-sonnet-5-5}
+      - ZAMMAD_URL=${ZAMMAD_URL}
+      - ZAMMAD_TOKEN=${ZAMMAD_TOKEN}
+      - BEXIO_CLIENT_ID=${BEXIO_CLIENT_ID}
+      - BEXIO_CLIENT_SECRET=${BEXIO_CLIENT_SECRET}
+      - PUSHOVER_APP_TOKEN=${PUSHOVER_APP_TOKEN:-}
+      - PUSHOVER_USER_KEY=${PUSHOVER_USER_KEY:-}
+      - DATA_DIR=/data
+      - TZ=${TZ:-Europe/Zurich}
+    volumes:
+      - finance-data:/data
+    ports:
+      - "${BIND_ADDR:-127.0.0.1}:${HOST_PORT:-8436}:8000"
+
+  worker:
+    image: ghcr.io/kdt-solutions/finance:latest
+    pull_policy: always
+    container_name: finance-worker
+    restart: unless-stopped
+    command: ["python", "-m", "app.worker"]
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.healthcheck"]
+      interval: 60s
+      timeout: 10s
+      start_period: 120s
+      retries: 3
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      - DATABASE_URL=postgresql+psycopg://finance:${POSTGRES_PASSWORD}@db:5432/finance
+      - SECRET_KEY=${SECRET_KEY}
+      - DATA_ENCRYPTION_KEY=${DATA_ENCRYPTION_KEY}
+      - ADMIN_USER=${ADMIN_USER:-admin}
+      - ADMIN_PASSWORD_HASH=${ADMIN_PASSWORD_HASH}
+      - PUBLIC_BASE_URL=${PUBLIC_BASE_URL}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-claude-sonnet-5-5}
+      - ZAMMAD_URL=${ZAMMAD_URL}
+      - ZAMMAD_TOKEN=${ZAMMAD_TOKEN}
+      - BEXIO_CLIENT_ID=${BEXIO_CLIENT_ID}
+      - BEXIO_CLIENT_SECRET=${BEXIO_CLIENT_SECRET}
+      - PUSHOVER_APP_TOKEN=${PUSHOVER_APP_TOKEN:-}
+      - PUSHOVER_USER_KEY=${PUSHOVER_USER_KEY:-}
+      - DATA_DIR=/data
+      - TZ=${TZ:-Europe/Zurich}
+      - WORKER_INTERVAL_SECONDS=${WORKER_INTERVAL_SECONDS:-300}
+    volumes:
+      - finance-data:/data
+
+  db:
+    image: postgres:16-alpine
+    container_name: finance-db
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=finance
+      - POSTGRES_USER=finance
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+    volumes:
+      - finance-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U finance -d finance"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  finance-db:
+  finance-data:

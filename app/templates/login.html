@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>finance – Anmelden</title><link rel="stylesheet" href="/static/style.css"></head>
+<body class="login">
+<form method="post" action="/login" class="card narrow">
+  <h1>finance</h1>
+  {% if error %}<p class="error">{{ error }}</p>{% endif %}
+  <label>Benutzer <input name="username" autocomplete="username" required autofocus></label>
+  <label>Passwort <input name="password" type="password" autocomplete="current-password" required></label>
+  {% if settings.admin_totp_secret %}<label>Code (TOTP) <input name="totp" inputmode="numeric" autocomplete="one-time-code" required></label>{% endif %}
+  <button class="primary">Anmelden</button>
+</form>
+</body></html>

@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Regeln – finance{% endblock %}
+{% block content %}
+<div class="bar">
+  <div class="tabs"><a href="/rules" class="{{ 'on' if not tenant }}">Alle</a>{% for t in tenants %}<a href="/rules?tenant={{ t.code }}" class="{{ 'on' if tenant == t.code }}">{{ t.code }}</a>{% endfor %}</div>
+  <form method="get" action="/rules" class="inline"><input type="hidden" name="tenant" value="{{ tenant }}"><input name="q" value="{{ q }}" placeholder="Lieferant suchen"><button>Suchen</button></form>
+  <form method="post" action="/rules/new" class="inline"><input type="hidden" name="csrf" value="{{ sess.csrf }}">
+    <select name="tenant">{% for t in tenants %}<option value="{{ t.code }}" {{ 'selected' if tenant == t.code }}>{{ t.code }}</option>{% endfor %}</select>
+    <input name="supplier_name" placeholder="Neuer Lieferant" required><button>Regel anlegen</button></form>
+</div>
+<table>
+<thead><tr><th>Mandant</th><th>Lieferant</th><th>Stichwörter</th><th>Konto</th><th>Steuer</th><th>Zahlung</th><th class="r">Band</th><th>Auto</th><th>Treffer</th><th>Quelle</th></tr></thead>
+<tbody>
+{% for r in rows %}
+<tr class="row {{ 'off' if not r.active }}" onclick="location.href='/rules/{{ r.id }}'">
+  <td>{{ r.supplier.tenant_id }}</td>
+  <td>{{ r.supplier.display_name }}</td>
+  <td class="muted">{{ r.keywords|join(', ') }}</td>
+  <td>{{ r.account_no or r.account_id or '–' }}</td>
+  <td>{{ r.tax_code or r.tax_id or '–' }}</td>
+  <td>{{ r.payment_mode }}{% if r.payment_account %} · {{ r.payment_account.label }}{% endif %}</td>
+  <td class="r muted">{% if r.amount_min is not none %}{{ '%.0f'|format(r.amount_min) }}–{{ '%.0f'|format(r.amount_max) }}{% endif %}</td>
+  <td>{{ 'ja' if r.auto_book else 'nein' }}</td>
+  <td>{{ r.hits }}</td>
+  <td class="muted">{{ r.learned_from }}</td>
+</tr>
+{% endfor %}
+</tbody></table>
+{% endblock %}

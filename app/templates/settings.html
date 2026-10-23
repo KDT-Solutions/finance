@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Einstellungen – finance{% endblock %}
+{% block content %}
+<h2>Einstellungen</h2>
+{% if msg %}<p class="ok">{{ msg }}</p>{% endif %}
+<p class="muted">bexio Redirect-URL für die Developer-App: <code>{{ redirect_uri }}</code> · Zammad: {{ settings.zammad_url or 'nicht konfiguriert' }}{% if zgroups %} · Gruppen: {{ zgroups|join(', ') }}{% endif %}</p>
+{% for t in tenants %}
+<section class="card">
+  <h3>{{ t.code }} · {{ t.name }}
+    {% if t.bexio_connected %}<span class="ok">bexio verbunden{% if t.bexio_company_name %} ({{ t.bexio_company_name }}){% endif %}{% if t.master_data_at %}, Stammdaten {{ t.master_data_at.strftime('%d.%m.%y %H:%M') }}{% endif %}</span>{% else %}<span class="error">bexio nicht verbunden</span>{% endif %}
+  </h3>
+  <div class="actions">
+    {% if t.bexio_connected %}
+      <form method="post" action="/settings/tenant/{{ t.code }}/refresh" class="inline"><input type="hidden" name="csrf" value="{{ sess.csrf }}"><button>Stammdaten laden</button></form>
+      <form method="post" action="/settings/tenant/{{ t.code }}/learn" class="inline"><input type="hidden" name="csrf" value="{{ sess.csrf }}"><button>Regeln aus bexio-Historie lernen</button></form>
+      <form method="post" action="/settings/tenant/{{ t.code }}/disconnect" class="inline" onsubmit="return confirm('bexio-Verbindung trennen?')"><input type="hidden" name="csrf" value="{{ sess.csrf }}"><button class="secondary">Trennen</button></form>
+    {% else %}
+      <a class="btn primary" href="/auth/bexio/start?tenant={{ t.code }}">Mit bexio verbinden</a>
+    {% endif %}
+  </div>
+  <form method="post" action="/settings/tenant/{{ t.code }}" class="grid">
+    <input type="hidden" name="csrf" value="{{ sess.csrf }}">
+    <label>Zammad-Gruppe Belege <input name="zammad_group_paid" value="{{ t.zammad_group_paid }}"></label>
+    <label>Zammad-Gruppe toPay <input name="zammad_group_topay" value="{{ t.zammad_group_topay }}"></label>
+    {% set md = t.master_data or {} %}
+    <label>Standard-Aufwandkonto <select name="default_expense_account_id"><option value="">–</option>{% for a in md.get('accounts', []) %}<option value="{{ a.id }}" {{ 'selected' if a.id == t.default_expense_account_id }}>{{ a.no }} {{ a.name }}</option>{% endfor %}</select></label>
+    <label>Standard-Steuercode <select name="default_tax_id"><option value="">–</option>{% for x in md.get('taxes', []) if x.active %}<option value="{{ x.id }}" {{ 'selected' if x.id == t.default_tax_id }}>{{ x.code }} {{ x.name }}</option>{% endfor %}</select></label>
+    <label>Kreditorenkonto <select name="creditor_account_id"><option value="">–</option>{% for a in md.get('accounts', []) %}<option value="{{ a.id }}" {{ 'selected' if a.id == t.creditor_account_id }}>{{ a.no }} {{ a.name }}</option>{% endfor %}</select></label>
+    <label>Kursdifferenzen <select name="fx_diff_account_id"><option value="">–</option>{% for a in md.get('accounts', []) %}<option value="{{ a.id }}" {{ 'selected' if a.id == t.fx_diff_account_id }}>{{ a.no }} {{ a.name }}</option>{% endfor %}</select></label>
+    <label>Gebühren <select name="fee_account_id"><option value="">–</option>{% for a in md.get('accounts', []) %}<option value="{{ a.id }}" {{ 'selected' if a.id == t.fee_account_id }}>{{ a.no }} {{ a.name }}</option>{% endfor %}</select></label>
+    <label>Aktiv <select name="active"><option value="1" {{ 'selected' if t.active }}>ja</option><option value="0" {{ 'selected' if not t.active }}>nein</option></select></label>
+    <div class="actions wide"><button>Speichern</button></div>
+  </form>
+</section>
+{% endfor %}
+{% endblock %}

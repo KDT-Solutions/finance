@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Todo – finance{% endblock %}
+{% block content %}
+<div class="bar">
+  <div class="tabs">
+    <a href="/todo" class="{{ 'on' if not tenant }}">Alle</a>
+    {% for t in tenants %}<a href="/todo?tenant={{ t.code }}" class="{{ 'on' if tenant == t.code }}">{{ t.code }}{% if counts.get(t.code) %} <span class="badge">{{ counts[t.code] }}</span>{% endif %}</a>{% endfor %}
+  </div>
+  <div class="tabs small">
+    <a href="/todo?tenant={{ tenant }}" class="{{ 'on' if not state }}">Offen</a>
+    <a href="/todo?tenant={{ tenant }}&state=new" class="{{ 'on' if state == 'new' }}">Neu</a>
+    <a href="/todo?tenant={{ tenant }}&state=skipped" class="{{ 'on' if state == 'skipped' }}">Übersprungen</a>
+    <a href="/todo?tenant={{ tenant }}&state=not_a_receipt" class="{{ 'on' if state == 'not_a_receipt' }}">Kein Beleg</a>
+  </div>
+  <form method="post" action="/upload" enctype="multipart/form-data" class="inline upload">
+    <input type="hidden" name="csrf" value="{{ sess.csrf }}">
+    <select name="tenant">{% for t in tenants %}<option value="{{ t.code }}" {{ 'selected' if tenant == t.code }}>{{ t.code }}</option>{% endfor %}</select>
+    <input type="file" name="file" accept="application/pdf" required>
+    <button>PDF hochladen</button>
+  </form>
+</div>
+{% if not docs %}<p class="empty">Nichts zu tun.</p>{% else %}
+<table>
+<thead><tr><th>Mandant</th><th>Eingang</th><th>Ticket</th><th>Lieferant</th><th class="r">Betrag</th><th>Status</th><th>Grund</th></tr></thead>
+<tbody>
+{% for d in docs %}{% set dec = d.decision or {} %}
+<tr class="row" onclick="location.href='/docs/{{ d.id }}'">
+  <td>{{ d.tenant.code }}</td>
+  <td>{{ d.received_at.strftime('%d.%m.%y') }}</td>
+  <td>{% if d.zammad_ticket_number %}#{{ d.zammad_ticket_number }}{% else %}Upload{% endif %}</td>
+  <td>{{ dec.get('supplier_name') or d.filename }}</td>
+  <td class="r">{% if dec.get('amount') %}{{ dec.get('currency','CHF') }} {{ '%.2f'|format(dec.amount) }}{% endif %}</td>
+  <td><span class="state {{ d.state }}">{{ d.state }}</span></td>
+  <td class="muted">{{ d.review_reason or d.last_error or '' }}</td>
+</tr>
+{% endfor %}
+</tbody></table>
+{% endif %}
+{% endblock %}

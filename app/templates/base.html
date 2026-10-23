@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}finance{% endblock %}</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="/todo">finance</a>
+  <nav>
+    <a href="/todo" class="{{ 'on' if request.url.path.startswith('/todo') or request.url.path.startswith('/docs') }}">Todo
+      {% set total = counts.values()|sum %}{% if total %}<span class="badge">{{ total }}</span>{% endif %}</a>
+    <a href="/bookings" class="{{ 'on' if request.url.path.startswith('/bookings') }}">Gebucht</a>
+    <a href="/rules" class="{{ 'on' if request.url.path.startswith('/rules') }}">Regeln</a>
+    <a href="/accounts" class="{{ 'on' if request.url.path.startswith('/accounts') }}">Zahlkonten</a>
+    <a href="/audit" class="{{ 'on' if request.url.path.startswith('/audit') }}">Audit</a>
+    <a href="/settings" class="{{ 'on' if request.url.path.startswith('/settings') }}">Einstellungen</a>
+  </nav>
+  {% if sess %}
+  <form method="post" action="/logout" class="inline"><input type="hidden" name="csrf" value="{{ sess.csrf }}"><button class="link">Abmelden</button></form>
+  {% endif %}
+</header>
+<main>
+{% block content %}{% endblock %}
+</main>
+</body>
+</html>

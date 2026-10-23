@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block title %}Beleg {{ doc.id }} – finance{% endblock %}
+{% block content %}
+{% set llm = (extraction.llm if extraction else {}) or {} %}
+{% set qr = (extraction.qr if extraction else none) %}
+<div class="split">
+  <div class="pane pdf">
+    <object data="/docs/{{ doc.id }}/pdf" type="application/pdf" class="pdfview"><a href="/docs/{{ doc.id }}/pdf">PDF öffnen</a></object>
+  </div>
+  <div class="pane form">
+    <div class="head">
+      <h2>{{ doc.tenant.code }} · {% if doc.zammad_ticket_number %}Ticket#{{ doc.zammad_ticket_number }}{% else %}Upload{% endif %} · <span class="state {{ doc.state }}">{{ doc.state }}</span></h2>
+      <p class="muted">{{ doc.filename }} · {{ doc.received_at.strftime('%d.%m.%Y %H:%M') }} · Gruppe {{ doc.zammad_group or '-' }}{% if doc.ticket_title %} · {{ doc.ticket_title }}{% endif %}</p>
+      {% if doc.review_reason %}<p class="warn">{{ doc.review_reason }}</p>{% endif %}
+      {% if doc.last_error %}<p class="error">{{ doc.last_error }}</p>{% endif %}
+      {% if doc.booking %}<p class="ok">Gebucht als {{ doc.booking.kind }} · bexio {{ doc.booking.bexio_bill_id or doc.booking.bexio_entry_id }} · {{ doc.booking.booked_at.strftime('%d.%m.%Y %H:%M') }}</p>{% endif %}
+    </div>
+
+    {% if extraction %}
+    <details class="box" open>
+      <summary>Gelesen (QR + LLM{% if dec.matched_by %}, Lieferant via {{ dec.matched_by }}{% endif %})</summary>
+      <dl class="kv">
+        {% if qr %}<dt>QR</dt><dd>{{ qr.creditor_name }} · {{ qr.iban }} · {{ qr.currency }} {{ qr.amount }} · {{ qr.reference_type }} {{ qr.reference }}{% if qr.message %} · {{ qr.message }}{% endif %}</dd>{% endif %}
+        <dt>Typ</dt><dd>{{ llm.document_type }}{% if not llm.is_receipt %} (kein Beleg){% endif %} · Zahlstatus {{ llm.payment_status }} {{ llm.paid_hint or '' }} {{ llm.payment_method_hint or '' }}{% if llm.card_last4 %} ****{{ llm.card_last4 }}{% endif %}</dd>
+        <dt>Total</dt><dd>{{ llm.currency }} {{ llm.total_gross }} (netto {{ llm.total_net }}){% for v in llm.vat_lines or [] %} · MWST {{ v.rate }}% {{ v.amount }}{% endfor %}</dd>
+        <dt>Positionen</dt><dd>{% for li in llm.line_items or [] %}{{ li.description }} ({{ li.amount_gross }}){% if not loop.last %}; {% endif %}{% endfor %}</dd>
+        <dt>Konfidenz</dt><dd>{% for k, v in (llm.confidence or {}).items() %}{{ k }} {{ '%.2f'|format(v) }} {% endfor %}</dd>
+        <dt>Modell</dt><dd class="muted">{{ extraction.model }} / Prompt v{{ extraction.prompt_version }}</dd>
+      </dl>
+    </details>
+    {% endif %}
+
+    <form method="post" action="/docs/{{ doc.id }}/book" class="grid" id="bookform">
+      <input type="hidden" name="csrf" value="{{ sess.csrf }}">
+      <label>Lieferant <input name="supplier_name" value="{{ dec.supplier_name or (doc.supplier.display_name if doc.supplier else '') }}" required></label>
+      <label>Belegnummer <input name="document_number" value="{{ dec.document_number or '' }}"></label>
+      <label>Belegdatum <input name="doc_date" type="date" value="{{ dec.doc_date or '' }}" required></label>
+      <label>Fällig <input name="due_date" type="date" value="{{ dec.due_date or '' }}"></label>
+      <label>Betrag <input name="amount" value="{{ '%.2f'|format(dec.amount) if dec.amount else '' }}" required inputmode="decimal"></label>
+      <label>Währung <input name="currency" value="{{ dec.currency or 'CHF' }}" maxlength="3"></label>
+      <label class="wide">Aufwandkonto
+        <select name="account_id" required>
+          <option value="">–</option>
+          {% for a in md.get('accounts', []) %}<option value="{{ a.id }}" {{ 'selected' if a.id == dec.account_id }}>{{ a.no }} {{ a.name }}</option>{% endfor %}
+        </select>
+      </label>
+      <label class="wide">Steuercode
+        <select name="tax_id">
+          <option value="">–</option>
+          {% for t in md.get('taxes', []) if t.active %}<option value="{{ t.id }}" {{ 'selected' if t.id == dec.tax_id }}>{{ t.code }} {{ t.name }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>Zahlung
+        <select name="payment_mode">
+          <option value="open" {{ 'selected' if dec.payment_mode in ('open', none) }}>offen (Kreditorenrechnung)</option>
+          <option value="card" {{ 'selected' if dec.payment_mode == 'card' }}>bezahlt mit Karte</option>
+          <option value="private" {{ 'selected' if dec.payment_mode == 'private' }}>bezahlt privat (Kim)</option>
+          <option value="bank_paid" {{ 'selected' if dec.payment_mode == 'bank_paid' }}>bereits ab Bank bezahlt</option>
+        </select>
+      </label>
+      <label>Zahlkonto
+        <select name="payment_account_id">
+          <option value="">–</option>
+          {% for p in payment_accounts %}<option value="{{ p.id }}" {{ 'selected' if p.id == dec.payment_account_id }}>{{ p.label }}{% if p.card_last4 %} ****{{ p.card_last4 }}{% endif %}</option>{% endfor %}
+        </select>
+      </label>
+      <label class="wide">Buchungstext <input name="booking_text" value="{{ dec.booking_text or '' }}"></label>
+      <label class="wide">Regel-Stichwörter (optional, Komma) <input name="keywords" value="{{ (doc.rule.keywords|join(', ')) if doc.rule else '' }}"></label>
+      <label class="check wide"><input type="checkbox" name="remember" value="1" checked> Regel für diesen Lieferanten merken (danach automatisch)</label>
+      <div class="actions wide">
+        {% if doc.tenant.bexio_connected %}<button class="primary" {{ 'disabled' if doc.state == 'booked' }}>Buchen</button>{% else %}<span class="error">bexio für {{ doc.tenant.code }} nicht verbunden</span>{% endif %}
+        <button formaction="/docs/{{ doc.id }}/save" class="secondary">Nur speichern</button>
+      </div>
+    </form>
+    <div class="actions">
+      <form method="post" action="/docs/{{ doc.id }}/skip" class="inline"><input type="hidden" name="csrf" value="{{ sess.csrf }}"><input type="hidden" name="kind" value="skip"><button class="secondary">Überspringen</button></form>
+      <form method="post" action="/docs/{{ doc.id }}/skip" class="inline"><input type="hidden" name="csrf" value="{{ sess.csrf }}"><input type="hidden" name="kind" value="not_receipt"><input type="hidden" name="close_ticket" value="1"><button class="secondary">Kein Beleg, Ticket schliessen</button></form>
+      <form method="post" action="/docs/{{ doc.id }}/reprocess" class="inline"><input type="hidden" name="csrf" value="{{ sess.csrf }}"><button class="secondary">Neu auslesen</button></form>
+      {% if next_doc %}<a class="btn" href="/docs/{{ next_doc.id }}">Nächster Beleg</a>{% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Regel {{ rule.supplier.display_name }} – finance{% endblock %}
+{% block content %}
+<h2>{{ t.code }} · {{ rule.supplier.display_name }}</h2>
+<form method="post" action="/rules/{{ rule.id }}" class="grid card">
+  <input type="hidden" name="csrf" value="{{ sess.csrf }}">
+  <label class="wide">IBANs (Komma) <input name="ibans" value="{{ rule.supplier.ibans|join(', ') }}"></label>
+  <label>UID <input name="uid" value="{{ rule.supplier.uid or '' }}"></label>
+  <label>bexio Kontakt-ID <input name="bexio_contact_id" value="{{ rule.supplier.bexio_contact_id or '' }}"></label>
+  <label class="wide">Namensvarianten (Komma) <input name="name_variants" value="{{ rule.supplier.name_variants|join(', ') }}"></label>
+  <label class="wide">Stichwörter für diese Variante (Komma, leer = Standardregel) <input name="keywords" value="{{ rule.keywords|join(', ') }}"></label>
+  <label class="wide">Aufwandkonto
+    <select name="account_id"><option value="">–</option>{% for a in md.get('accounts', []) %}<option value="{{ a.id }}" {{ 'selected' if a.id == rule.account_id }}>{{ a.no }} {{ a.name }}</option>{% endfor %}</select>
+  </label>
+  <label class="wide">Steuercode
+    <select name="tax_id"><option value="">–</option>{% for x in md.get('taxes', []) if x.active %}<option value="{{ x.id }}" {{ 'selected' if x.id == rule.tax_id }}>{{ x.code }} {{ x.name }}</option>{% endfor %}</select>
+  </label>
+  <label>Zahlung
+    <select name="payment_mode">
+      {% for v, l in [('open','offen'),('card','Karte'),('private','privat (Kim)'),('bank_paid','ab Bank bezahlt')] %}<option value="{{ v }}" {{ 'selected' if rule.payment_mode == v }}>{{ l }}</option>{% endfor %}
+    </select>
+  </label>
+  <label>Zahlkonto
+    <select name="payment_account_id"><option value="">–</option>{% for p in payment_accounts %}<option value="{{ p.id }}" {{ 'selected' if p.id == rule.payment_account_id }}>{{ p.label }}</option>{% endfor %}</select>
+  </label>
+  <label class="wide">Buchungstext-Vorlage <input name="booking_text" value="{{ rule.booking_text or '' }}"></label>
+  <label>Betrag min <input name="amount_min" value="{{ rule.amount_min if rule.amount_min is not none else '' }}"></label>
+  <label>Betrag max <input name="amount_max" value="{{ rule.amount_max if rule.amount_max is not none else '' }}"></label>
+  <label class="check"><input type="checkbox" name="auto_book" value="1" {{ 'checked' if rule.auto_book }}> ohne Rückfrage buchen</label>
+  <label class="check"><input type="checkbox" name="active" value="1" {{ 'checked' if rule.active }}> aktiv</label>
+  <div class="actions wide"><button class="primary">Speichern</button> <a class="btn" href="/rules?tenant={{ t.code }}">Zurück</a></div>
+</form>
+<p class="muted">Treffer {{ rule.hits }} · Quelle {{ rule.learned_from }}{% if rule.last_corrected_at %} · zuletzt korrigiert {{ rule.last_corrected_at.strftime('%d.%m.%Y') }}{% endif %}</p>
+{% endblock %}
