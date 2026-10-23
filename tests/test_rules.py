@@ -17,7 +17,11 @@ def db():
     Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)
     with SessionLocal() as s:
-        t = Tenant(code="KDT", name="KDT", zammad_group_paid="Finance KDT", zammad_group_topay="Finance toPay KDT", default_expense_account_id=90, default_tax_id=5)
+        t = Tenant(code="KDT", name="KDT", zammad_group_paid="Finance KDT", zammad_group_topay="Finance toPay KDT", default_expense_account_id=90, default_tax_id=5,
+                   master_data={"accounts": [{"id": 40, "no": "6200", "name": "Reparaturen"}, {"id": 90, "no": "4400", "name": "Einkauf DL"}],
+                                "taxes": [{"id": 3, "code": "VB81", "rate": 8.1, "type": "pre_tax_investment", "active": True},
+                                          {"id": 5, "code": "VM81", "rate": 8.1, "type": "pre_tax_material", "active": True},
+                                          {"id": 6, "code": "VM26", "rate": 2.6, "type": "pre_tax_material", "active": True}]})
         s.add(t)
         s.flush()
         sup = Supplier(tenant_id=t.id, display_name="Hornbach Baumarkt AG", name_key=rules.normalize_name("Hornbach Baumarkt AG"), ibans=["CH11"], uid="CHE-111.222.333", name_variants=[])
@@ -96,3 +100,24 @@ def test_learn_from_decision(db):
     assert r.auto_book is True and r.amount_min == 100.0 and r.amount_max == 400.0
     r2 = rules.learn_from_decision(db, t, sup, r, {"account_id": 42, "tax_id": 3, "payment_mode": "open", "amount": 300.0})
     assert r2.auto_book is False  # correction resets auto
+
+
+def test_tax_from_document_not_rule(db):
+    t = db.query(Tenant).one()
+    sup, _ = rules.match_supplier(db, t.id, name="Hornbach Baumarkt AG")
+    rule = rules.find_rule(sup, "")
+    base = {"is_receipt": True, "document_type": "receipt", "supplier_name": "Hornbach", "document_number": "R2", "document_date": "2026-10-01",
+            "currency": "CHF", "total_gross": 102.6, "payment_status": "paid", "paid_hint": "bezahlt", "card_last4": "1234",
+            "confidence": {"total_gross": 0.99, "document_date": 0.98, "supplier_name": 0.9, "payment_status": 0.9}}
+    # 2.6% on the document although the rule says VB81: code follows the document, flagged for review
+    d = rules.decide(db, t, group="Finance KDT", qr=None, llm={**base, "total_net": 100.0, "vat_lines": [{"rate": 2.6, "amount": 2.6, "base": 100.0}]}, text="", supplier=sup, rule=rule)
+    assert d.tax_id == 6 and any("2.6%" in r for r in d.reasons) and d.auto is False
+    # foreign supplier: no code, review
+    d = rules.decide(db, t, group="Finance KDT", qr=None, llm={**base, "supplier_country": "DE", "total_net": 102.6, "vat_lines": []}, text="", supplier=sup, rule=None)
+    assert d.tax_id is None and any("Ausländischer" in r for r in d.reasons)
+    # CH supplier without VAT: no code, review
+    d = rules.decide(db, t, group="Finance KDT", qr=None, llm={**base, "supplier_country": "CH", "total_net": 102.6, "vat_lines": []}, text="", supplier=sup, rule=rule)
+    assert d.tax_id is None and any("Keine MWST" in r for r in d.reasons)
+    # 4xxx account gets the VM code
+    assert rules.pick_tax(t, 90, 8.1)["code"] == "VM81"
+    assert rules.pick_tax(t, 40, 8.1)["code"] == "VB81"

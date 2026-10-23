@@ -110,6 +110,58 @@ def _fmt_amount(v) -> float | None:
         return None
 
 
+def _master(tenant: Tenant, kind: str, id_: int | None) -> dict:
+    for row in (tenant.master_data or {}).get(kind, []):
+        if row.get("id") == id_:
+            return row
+    return {}
+
+
+def is_foreign(qr: dict | None, llm: dict) -> bool:
+    """Supplier outside CH/LI: by stated country, else by the IBAN country."""
+    country = (llm.get("supplier_country") or "").upper()
+    if country:
+        return country not in ("CH", "LI")
+    iban = ((qr or {}).get("iban") or llm.get("supplier_iban") or "").replace(" ", "").upper()
+    if iban:
+        return iban[:2] not in ("CH", "LI")
+    return bool(llm.get("is_foreign_supplier"))
+
+
+def document_vat_rate(llm: dict) -> float | None:
+    """Dominant VAT rate on the document (largest base), None if no VAT is shown."""
+    best, base = None, -1.0
+    for v in llm.get("vat_lines") or []:
+        try:
+            rate = round(float(v.get("rate") or 0), 2)
+            b = float(v.get("base") or v.get("amount") or 0)
+        except (TypeError, ValueError):
+            continue
+        if rate > 0 and b > base:
+            best, base = rate, b
+    if best is None:
+        for li in llm.get("line_items") or []:
+            try:
+                rate = round(float(li.get("vat_rate") or 0), 2)
+            except (TypeError, ValueError):
+                continue
+            if rate > 0:
+                return rate
+    return best
+
+
+def pick_tax(tenant: Tenant, account_id: int | None, rate: float) -> dict | None:
+    """Pre-tax code for the rate: VM* (material/services, 4xxx accounts) or VB* (investment/operating, other accounts)."""
+    acc_no = _master(tenant, "accounts", account_id).get("no", "")
+    want = "pre_tax_material" if acc_no.startswith("4") else "pre_tax_investment"
+    taxes = [t for t in (tenant.master_data or {}).get("taxes", []) if t.get("active", True) and t.get("rate") is not None
+             and abs(float(t["rate"]) - rate) < 0.01 and str(t.get("type", "")).startswith("pre_tax")]
+    for t in taxes:
+        if t.get("type") == want:
+            return t
+    return taxes[0] if taxes else None
+
+
 def decide(db: Session, tenant: Tenant, *, group: str, qr: dict | None, llm: dict, text: str,
            supplier: Supplier | None, rule: Rule | None, matched_by: str = "") -> Decision:
     s = get_settings()
@@ -202,9 +254,29 @@ def decide(db: Session, tenant: Tenant, *, group: str, qr: dict | None, llm: dic
         if d.payment_mode == "paid":
             reasons.append("Zahlkonto nicht bestimmbar (Karte/privat/Bank)")
 
-    if llm.get("is_foreign_supplier") or (llm.get("supplier_country") and llm.get("supplier_country") != "CH"):
-        if not rule:
-            reasons.append("Ausländischer Lieferant (Bezugsteuer prüfen)")
+    # --- VAT code: from the document, never blindly from the rule ---------------------
+    foreign = is_foreign(qr, llm)
+    doc_rate = document_vat_rate(llm)
+    if foreign:
+        # import / reverse charge: the code depends on customs paperwork, a confirmed rule may carry it
+        if not (rule and rule.tax_id):
+            d.tax_id = None
+            reasons.append("Ausländischer Lieferant: Steuercode prüfen (Import/Bezugsteuer)")
+    elif doc_rate:
+        tax = pick_tax(tenant, d.account_id, doc_rate)
+        if tax:
+            if rule and rule.tax_id and rule.tax_id != tax["id"]:
+                reasons.append(f"MWST {doc_rate}% auf Beleg, Regel hat {_master(tenant, 'taxes', rule.tax_id).get('code')}")
+            d.tax_id = tax["id"]
+        else:
+            d.tax_id = None
+            reasons.append(f"Kein Steuercode für {doc_rate}% in den Stammdaten")
+    else:
+        if rule and rule.tax_id:
+            reasons.append("Keine MWST auf dem Beleg ausgewiesen, Regel hat einen Steuercode")
+        d.tax_id = None
+        if not foreign and (llm.get("vat_lines") or llm.get("total_net")) and d.amount and _fmt_amount(llm.get("total_net")) == d.amount:
+            reasons.append("Keine MWST auf dem Beleg ausgewiesen")
 
     if not d.booking_text:
         d.booking_text = (llm.get("summary") or d.supplier_name or "")[:120]
