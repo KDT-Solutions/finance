@@ -60,6 +60,7 @@ class Supplier(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id"), index=True)
+    tenant: Mapped[Tenant] = relationship()
     bexio_contact_id: Mapped[int | None] = mapped_column(Integer, index=True)
     display_name: Mapped[str] = mapped_column(String(200))
     name_key: Mapped[str] = mapped_column(String(200), index=True)  # normalised name
@@ -77,6 +78,7 @@ class Rule(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id"), index=True)
+    tenant: Mapped[Tenant] = relationship()
     supplier_id: Mapped[int] = mapped_column(ForeignKey("suppliers.id"), index=True)
     # optional keywords in the document text that select this rule variant (empty = default)
     keywords: Mapped[list | None] = mapped_column(JSON, default=list)
@@ -107,6 +109,7 @@ class PaymentAccount(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id"), index=True)
+    tenant: Mapped[Tenant] = relationship()
     label: Mapped[str] = mapped_column(String(80))
     kind: Mapped[str] = mapped_column(String(16))  # bank | card | private
     card_last4: Mapped[str | None] = mapped_column(String(4))
@@ -175,6 +178,7 @@ class Booking(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     document_id: Mapped[int] = mapped_column(ForeignKey("documents.id"), unique=True)
     tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id"), index=True)
+    tenant: Mapped[Tenant] = relationship()
     kind: Mapped[str] = mapped_column(String(16))  # bill_open | bill_paid | entry
     bexio_bill_id: Mapped[str | None] = mapped_column(String(64))
     bexio_entry_id: Mapped[int | None] = mapped_column(Integer)

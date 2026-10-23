@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     bexio_api_url: str = "https://api.bexio.com"
     bexio_scopes: str = "openid profile offline_access accounting contact_edit file kb_bill_show bank_account_show"
 
+    # bearer token for the MCP endpoint (/mcp); empty = endpoint disabled
+    mcp_token: str = ""
+
     pushover_app_token: str = ""
     pushover_user_key: str = ""
 

@@ -14,7 +14,7 @@ from .. import auth
 from ..config import get_settings
 from ..db import SessionLocal
 from ..models import AuditLog, Booking, Document, KV, PaymentAccount, Rule, Supplier, Tenant, now
-from ..services import audit, bexio as bx, pipeline, rules
+from ..services import actions, audit, bexio as bx, pipeline, rules
 from ..services.zammad import ZammadClient
 
 log = logging.getLogger(__name__)
@@ -177,28 +177,14 @@ async def doc_book(request: Request, doc_id: int, db: Session = Depends(get_db),
         return RedirectResponse(f"/docs/{doc.id}", status_code=303)
     remember = form.get("remember") == "1"
     keywords = [k.strip() for k in (form.get("keywords") or "").split(",") if k.strip()]
-    audit.log(db, "document.decided", tenant_id=doc.tenant_id, actor=sess["u"], entity="document", entity_id=doc.id, details=dec)
     z = _zammad()
     try:
-        # move to toPay if it is an open invoice still sitting in the Finance group
-        if dec.get("payment_mode") == "open" and z and doc.zammad_ticket_id and doc.zammad_group == doc.tenant.zammad_group_paid:
-            try:
-                z.set_group(doc.zammad_ticket_id, doc.tenant.zammad_group_topay)
-                doc.zammad_group = doc.tenant.zammad_group_topay
-            except Exception:  # noqa: BLE001
-                log.exception("move failed")
-        pipeline.book(db, z, doc, actor=sess["u"])
-        if remember and doc.supplier:
-            rule = rules.learn_from_decision(db, doc.tenant, doc.supplier, doc.rule if (doc.rule and (doc.rule.keywords or []) == keywords) else None, dec, keywords=keywords, source="review")
-            doc.rule = rule
-            audit.log(db, "rule.learned", tenant_id=doc.tenant_id, actor=sess["u"], entity="rule", entity_id=rule.id, details={"supplier": doc.supplier.display_name, "auto_book": rule.auto_book})
-            db.commit()
-    except Exception as e:  # noqa: BLE001
-        log.warning("booking failed: %s", e)
-        return RedirectResponse(f"/docs/{doc.id}", status_code=303)
+        res = actions.book_with_decision(db, z, doc, dec, remember=remember, keywords=keywords, actor=sess["u"])
     finally:
         if z:
             z.close()
+    if not res["booked"]:
+        return RedirectResponse(f"/docs/{doc.id}", status_code=303)
     nxt = db.query(Document).filter(Document.tenant_id == doc.tenant_id, Document.state.in_(["needs_review", "error"])).order_by(Document.received_at.asc()).first()
     return RedirectResponse(f"/docs/{nxt.id}" if nxt else f"/todo?tenant={doc.tenant.code}", status_code=303)
 
@@ -220,19 +206,12 @@ async def doc_skip(request: Request, doc_id: int, db: Session = Depends(get_db),
         raise HTTPException(404)
     form = await request.form()
     kind = form.get("kind", "skip")
-    doc.state = {"skip": "skipped", "not_receipt": "not_a_receipt", "cancel": "cancelled"}.get(kind, "skipped")
-    audit.log(db, f"document.{doc.state}", tenant_id=doc.tenant_id, actor=sess["u"], entity="document", entity_id=doc.id)
-    db.commit()
-    if kind == "not_receipt" and form.get("close_ticket") == "1" and doc.zammad_ticket_id:
-        z = _zammad()
+    z = _zammad()
+    try:
+        actions.skip_document(db, z, doc, kind, close_ticket=form.get("close_ticket") == "1", actor=sess["u"])
+    finally:
         if z:
-            try:
-                z.add_note(doc.zammad_ticket_id, "finance: Kein Beleg, Ticket geschlossen.")
-                z.set_state(doc.zammad_ticket_id, "closed")
-            except Exception:  # noqa: BLE001
-                log.exception("close failed")
-            finally:
-                z.close()
+            z.close()
     return RedirectResponse(f"/todo?tenant={doc.tenant.code}", status_code=303)
 
 

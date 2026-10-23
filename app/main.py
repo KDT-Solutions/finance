@@ -10,7 +10,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from . import __version__
 from .db import init_db
-from .routes import ui
+from .routes import mcp, ui
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
@@ -24,6 +24,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="finance", version=__version__, lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 app.include_router(ui.router)
+app.include_router(mcp.router)
 
 
 @app.get("/healthz")

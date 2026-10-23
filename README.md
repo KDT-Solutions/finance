@@ -68,3 +68,11 @@ Purchase bills use API 4.0 (`POST /4.0/purchase/bills`, `PUT /4.0/purchase/bills
 The payload builder lives in `app/services/bexio.py` (`build_bill_payload`) and follows the OpenAPI spec embedded in docs.bexio.com; adjust field
 names there if bexio rejects the first real call (the error is shown on the document page).
 Manual entries use API 3.0 (`POST /3.0/accounting/manual_entries` + file attach on the line).
+
+## MCP endpoint
+
+`POST /mcp` speaks MCP over Streamable HTTP (JSON-RPC 2.0) so the tool can be driven from a chat client:
+todo list, document details, booking with corrections, rules (single and bulk upsert), payment accounts,
+tenant settings, master data refresh and the history import. Set `MCP_TOKEN` (bearer token, `openssl rand -hex 32`);
+without it the endpoint is disabled. Writing tools only run with `confirm=true`, otherwise they return a preview.
+Nothing is deleted; rules and payment accounts are deactivated instead.
