@@ -14,7 +14,7 @@ from .. import auth
 from ..config import get_settings
 from ..db import SessionLocal
 from ..models import AuditLog, Booking, Document, KV, PaymentAccount, Rule, Supplier, Tenant, now
-from ..services import actions, audit, bexio as bx, pipeline, rules
+from ..services import actions, audit, bexio as bx, payments, pipeline, rules
 from ..services.zammad import ZammadClient
 
 log = logging.getLogger(__name__)
@@ -317,6 +317,57 @@ def booking_restore(booking_id: int, db: Session = Depends(get_db), sess: dict =
     return RedirectResponse("/bookings", status_code=303)
 
 
+# --- payments (pain.001) -----------------------------------------------------------
+@router.get("/payments", response_class=HTMLResponse)
+def payments_page(request: Request, tenant: str = "", msg: str = "", err: str = "", db: Session = Depends(get_db), sess: dict = Depends(auth.require_login)):
+    tenants = _tenants(db)
+    t = next((x for x in tenants if x.code == tenant), None) or (tenants[0] if tenants else None)
+    if not t:
+        raise HTTPException(404)
+    rows = payments.open_bills(db, t)
+    in_file = [r for r in payments.open_bills(db, t, include_in_file=True) if r["payment_file"]]
+    return templates.TemplateResponse(request, "payments.html", _ctx(request, db, sess, tenant=t, rows=rows, in_file=in_file, files=payments.list_files(t),
+                                                                      today=now().date().isoformat(), msg=msg, err=err))
+
+
+@router.post("/payments/file")
+async def payments_file(request: Request, db: Session = Depends(get_db), sess: dict = Depends(auth.require_csrf)):
+    f = await request.form()
+    t = _tenant_or_404(db, f.get("tenant", ""))
+    ids = [int(x) for x in f.getlist("booking_id") if str(x).isdigit()]
+    try:
+        exec_date = datetime.strptime(f.get("execution_date", ""), "%Y-%m-%d").date() if f.get("execution_date") else None
+    except ValueError:
+        exec_date = None
+    z = _zammad()
+    try:
+        name, data, rows = payments.create_file(db, z, t, ids, exec_date, actor=sess["u"])
+    except ValueError as e:
+        return RedirectResponse(f"/payments?tenant={t.code}&err={e}", status_code=303)
+    finally:
+        if z:
+            z.close()
+    return RedirectResponse(f"/payments?tenant={t.code}&msg=Zahlfile {name} erstellt ({len(rows)} Zahlungen), unten herunterladen", status_code=303)
+
+
+@router.get("/payments/files/{code}/{name}")
+def payments_download(code: str, name: str, db: Session = Depends(get_db), sess: dict = Depends(auth.require_login)):
+    t = _tenant_or_404(db, code)
+    path = payments.file_path(t, name)
+    if not path:
+        raise HTTPException(404)
+    return FileResponse(path, media_type="application/xml", filename=name)
+
+
+@router.post("/payments/unmark/{booking_id}")
+def payments_unmark(booking_id: int, db: Session = Depends(get_db), sess: dict = Depends(auth.require_csrf)):
+    b = db.get(Booking, booking_id)
+    if not b:
+        raise HTTPException(404)
+    payments.unmark(db, b, actor=sess["u"])
+    return RedirectResponse(f"/payments?tenant={db.get(Tenant, b.tenant_id).code}", status_code=303)
+
+
 @router.get("/rules", response_class=HTMLResponse)
 def rules_list(request: Request, tenant: str = "", q: str = "", db: Session = Depends(get_db), sess: dict = Depends(auth.require_login)):
     query = db.query(Rule).join(Supplier).join(Tenant, Rule.tenant_id == Tenant.id)
@@ -465,6 +516,8 @@ async def tenant_save(request: Request, code: str, db: Session = Depends(get_db)
     t.fx_diff_account_id = _resolve_account(t, f.get("fx_diff_account_no"))
     t.fee_account_id = _resolve_account(t, f.get("fee_account_no"))
     t.bank_account_id = integer(f.get("bank_account_id"))
+    t.payment_iban = rules.normalize_iban(f.get("payment_iban")) or None
+    t.payment_name = (f.get("payment_name") or "").strip()[:70] or None
     t.active = f.get("active", "1") == "1"
     audit.log(db, "tenant.saved", tenant_id=t.id, actor=sess["u"], entity="tenant", entity_id=t.id)
     db.commit()

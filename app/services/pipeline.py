@@ -279,7 +279,7 @@ def book(db: Session, z: ZammadClient | None, doc: Document, *, actor: str = "sy
                     bill_date=dec.get("doc_date") or now().date().isoformat(), due_date=dec.get("due_date") or "",
                     currency=dec.get("currency") or "CHF", amount_gross=amount, account_id=int(dec["account_id"]),
                     tax_id=dec.get("tax_id"), text=desc, attachment_ids=[file_id], qr=qr, bank_account_id=tenant.bank_account_id,
-                    exchange_rate=rate,
+                    exchange_rate=rate, supplier_iban=(llm.get("supplier_iban") or ""),
                 ))
                 bill_id = str(created.get("id"))
                 try:

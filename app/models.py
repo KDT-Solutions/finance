@@ -37,6 +37,9 @@ class Tenant(Base):
     default_tax_id: Mapped[int | None] = mapped_column(Integer)
     # bexio bank account (3.0/banking/accounts id) used as paying account on purchase bills
     bank_account_id: Mapped[int | None] = mapped_column(Integer)
+    # debtor data for payment files (pain.001): IBAN of the paying bank account, name as the bank knows it
+    payment_iban: Mapped[str | None] = mapped_column(String(34))
+    payment_name: Mapped[str | None] = mapped_column(String(70))
     # bexio user id used as contact_partner / owner when creating contacts
     bexio_user_id: Mapped[int | None] = mapped_column(Integer)
     # how to book paid receipts: "bill" (purchase bill + outgoing payment) or "entry" (manual entry)
@@ -191,6 +194,9 @@ class Booking(Base):
     status: Mapped[str] = mapped_column(String(16), default="ok")  # ok | cancelled
     bexio_status: Mapped[str | None] = mapped_column(String(32))
     paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # included in a pain.001 payment file (name + time), so it is not paid twice
+    payment_file: Mapped[str | None] = mapped_column(String(80))
+    payment_file_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     booked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
     document: Mapped[Document] = relationship(back_populates="booking")

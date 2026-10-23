@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}Zahlungen – finance{% endblock %}
+{% block content %}
+<h2>Zahlungen</h2>
+{% if msg %}<p class="ok">{{ msg }}</p>{% endif %}
+{% if err %}<p class="error">{{ err }}</p>{% endif %}
+<div class="filters">
+  {% for t in tenants %}<a href="/payments?tenant={{ t.code }}" class="{{ 'on' if t.code == tenant.code }}">{{ t.code }}</a>{% endfor %}
+</div>
+<p class="muted">Offene Kreditorenrechnungen aus dem Tool, noch nicht bezahlt und noch in keinem Zahlfile.
+  Zahl-IBAN {{ tenant.code }}: {% if tenant.payment_iban %}<code>{{ tenant.payment_iban }}</code> ({{ tenant.payment_name or tenant.name }}){% else %}<span class="error">fehlt, unter Einstellungen setzen</span>{% endif %}</p>
+{% if not rows %}<p class="empty">Keine offenen Zahlungen.</p>{% else %}
+<form method="post" action="/payments/file" data-confirm="Zahlfile für die markierten Rechnungen erstellen? Die Rechnungen werden als 'im Zahlfile' markiert.">
+<input type="hidden" name="csrf" value="{{ sess.csrf }}"><input type="hidden" name="tenant" value="{{ tenant.code }}">
+<table>
+<thead><tr><th></th><th>Lieferant</th><th>Beleg-Nr.</th><th>Fällig</th><th class="r">Betrag</th><th>IBAN</th><th>Referenz / Mitteilung</th><th>Ticket</th><th></th></tr></thead>
+<tbody>
+{% for r in rows %}
+<tr class="{{ 'off' if r.problems }}">
+  <td>{% if not r.problems %}<input type="checkbox" name="booking_id" value="{{ r.booking_id }}" checked>{% endif %}</td>
+  <td><a href="/docs/{{ r.document_id }}">{{ r.supplier }}</a></td>
+  <td>{{ r.document_number or '' }}</td>
+  <td>{{ r.due_date or '' }}</td>
+  <td class="r">{{ r.currency }} {{ '%.2f'|format(r.amount or 0) }}</td>
+  <td class="muted">{{ r.iban }}</td>
+  <td class="muted">{% if r.reference_type %}{{ r.reference_type }} {{ r.reference }}{% else %}{{ r.message }}{% endif %}</td>
+  <td>{% if r.ticket %}#{{ r.ticket }}{% endif %}</td>
+  <td class="error">{{ r.problems|join(', ') }}</td>
+</tr>
+{% endfor %}
+</tbody></table>
+<div class="actions">
+  <label>Ausführung <input type="date" name="execution_date" value="{{ today }}"></label>
+  <button class="primary" {{ 'disabled' if not tenant.payment_iban }}>Zahlfile erstellen (pain.001)</button>
+</div>
+</form>
+{% endif %}
+
+{% if in_file %}
+<h3>Im Zahlfile, warten auf Banksync</h3>
+<table>
+<thead><tr><th>Lieferant</th><th>Beleg-Nr.</th><th class="r">Betrag</th><th>Zahlfile</th><th>Ticket</th><th></th></tr></thead>
+<tbody>
+{% for r in in_file %}
+<tr>
+  <td><a href="/docs/{{ r.document_id }}">{{ r.supplier }}</a></td>
+  <td>{{ r.document_number or '' }}</td>
+  <td class="r">{{ r.currency }} {{ '%.2f'|format(r.amount or 0) }}</td>
+  <td class="muted">{{ r.payment_file }} · {{ r.payment_file_at.strftime('%d.%m.%y %H:%M') if r.payment_file_at }}</td>
+  <td>{% if r.ticket %}#{{ r.ticket }}{% endif %}</td>
+  <td><form method="post" action="/payments/unmark/{{ r.booking_id }}" class="inline" data-confirm="Markierung entfernen? Nur wenn das Zahlfile nicht hochgeladen wurde, sonst wird doppelt bezahlt."><input type="hidden" name="csrf" value="{{ sess.csrf }}"><button class="link">nicht hochgeladen</button></form></td>
+</tr>
+{% endfor %}
+</tbody></table>
+{% endif %}
+
+{% if files %}
+<h3>Erstellte Zahlfiles</h3>
+<ul class="plain">
+{% for f in files %}<li><a href="/payments/files/{{ tenant.code }}/{{ f.name }}">{{ f.name }}</a> <span class="muted">{{ f.at.strftime('%d.%m.%y %H:%M') }}, {{ f.size }} Bytes</span></li>{% endfor %}
+</ul>
+{% endif %}
+<p class="muted">Datei im E-Banking als Zahlungsauftrag (pain.001) hochladen und freigeben. Nach dem Banksync meldet bexio die Rechnung als bezahlt, das Tool schliesst dann das Ticket.</p>
+{% endblock %}

@@ -1,0 +1,121 @@
+"""pain.001.001.09 payment file (Swiss Payment Standard) for upload in e-banking.
+
+One PmtInf per file (one debtor account, one execution date), one CdtTrfTxInf per bill.
+Payment types: QR-IBAN with QR reference (QRR), IBAN with creditor reference (SCOR) or
+IBAN with free message (SEPA / foreign). The debtor agent is given as Swiss clearing
+number (IID from the debtor IBAN), so no BIC needs to be configured.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass, field
+from datetime import date, datetime
+from xml.sax.saxutils import escape
+
+NS = "urn:iso:std:iso:20022:tech:xsd:pain.001.001.09"
+
+
+@dataclass
+class Payment:
+    end_to_end_id: str
+    amount: float
+    currency: str
+    creditor_name: str
+    iban: str
+    reference_type: str = ""  # QRR | SCOR | ""
+    reference: str = ""
+    message: str = ""
+    country: str = ""
+    address_lines: list[str] = field(default_factory=list)
+
+
+def iban_valid(iban: str) -> bool:
+    s = re.sub(r"\s+", "", iban or "").upper()
+    if not re.fullmatch(r"[A-Z]{2}\d{2}[A-Z0-9]{11,30}", s):
+        return False
+    digits = "".join(str(int(c, 36)) for c in s[4:] + s[:4])
+    return int(digits) % 97 == 1
+
+
+def is_qr_iban(iban: str) -> bool:
+    s = re.sub(r"\s+", "", iban or "").upper()
+    return s[:2] in ("CH", "LI") and len(s) >= 9 and 30000 <= int(s[4:9]) <= 31999
+
+
+def _clean(text: str, limit: int) -> str:
+    """SPS character set: Latin, no control characters."""
+    t = re.sub(r"[\x00-\x1f\x7f]", " ", text or "")
+    t = re.sub(r"\s+", " ", t).strip()
+    return t[:limit]
+
+
+def _id(text: str, limit: int = 35) -> str:
+    t = re.sub(r"[^A-Za-z0-9\-]", "-", text or "")
+    return (t or "X")[:limit]
+
+
+def build(*, debtor_name: str, debtor_iban: str, payments: list[Payment], execution_date: date | None = None,
+          msg_id: str | None = None, created: datetime | None = None) -> bytes:
+    if not iban_valid(debtor_iban):
+        raise ValueError("Debtor IBAN invalid")
+    debtor_iban = re.sub(r"\s+", "", debtor_iban).upper()
+    if debtor_iban[:2] != "CH" and debtor_iban[:2] != "LI":
+        raise ValueError("Debtor IBAN must be a Swiss/Liechtenstein IBAN")
+    if not payments:
+        raise ValueError("No payments")
+    created = created or datetime.now()
+    execution_date = execution_date or created.date()
+    msg_id = _id(msg_id or created.strftime("FIN%Y%m%d%H%M%S"))
+    total = round(sum(p.amount for p in payments), 2)
+    iid = str(int(debtor_iban[4:9]))
+
+    tx = []
+    for i, p in enumerate(payments, start=1):
+        if not iban_valid(p.iban):
+            raise ValueError(f"Creditor IBAN invalid: {p.iban} ({p.creditor_name})")
+        iban = re.sub(r"\s+", "", p.iban).upper()
+        qr = is_qr_iban(iban)
+        if qr and p.reference_type != "QRR":
+            raise ValueError(f"QR-IBAN needs a QR reference: {p.creditor_name}")
+        if p.reference_type == "QRR" and not qr:
+            raise ValueError(f"QR reference needs a QR-IBAN: {p.creditor_name}")
+        rmt = ""
+        if p.reference_type == "QRR":
+            rmt = (f"<RmtInf><Strd><CdtrRefInf><Tp><CdOrPrtry><Prtry>QRR</Prtry></CdOrPrtry></Tp><Ref>{escape(_clean(p.reference, 27))}</Ref></CdtrRefInf>"
+                   + (f"<AddtlRmtInf>{escape(_clean(p.message, 140))}</AddtlRmtInf>" if p.message else "") + "</Strd></RmtInf>")
+        elif p.reference_type == "SCOR":
+            rmt = (f"<RmtInf><Strd><CdtrRefInf><Tp><CdOrPrtry><Cd>SCOR</Cd></CdOrPrtry></Tp><Ref>{escape(_clean(p.reference, 25))}</Ref></CdtrRefInf>"
+                   + (f"<AddtlRmtInf>{escape(_clean(p.message, 140))}</AddtlRmtInf>" if p.message else "") + "</Strd></RmtInf>")
+        elif p.message:
+            rmt = f"<RmtInf><Ustrd>{escape(_clean(p.message, 140))}</Ustrd></RmtInf>"
+        addr = ""
+        if p.country or p.address_lines:
+            lines = "".join(f"<AdrLine>{escape(_clean(a, 70))}</AdrLine>" for a in p.address_lines[:2] if a)
+            addr = "<PstlAdr>" + (f"<Ctry>{escape(p.country[:2].upper())}</Ctry>" if p.country else "") + lines + "</PstlAdr>"
+        tx.append(
+            "<CdtTrfTxInf>"
+            f"<PmtId><InstrId>{escape(_id(f'{msg_id}-{i}'))}</InstrId><EndToEndId>{escape(_id(p.end_to_end_id))}</EndToEndId></PmtId>"
+            f"<Amt><InstdAmt Ccy=\"{escape(p.currency.upper())}\">{p.amount:.2f}</InstdAmt></Amt>"
+            f"<Cdtr><Nm>{escape(_clean(p.creditor_name, 70))}</Nm>{addr}</Cdtr>"
+            f"<CdtrAcct><Id><IBAN>{iban}</IBAN></Id></CdtrAcct>"
+            f"{rmt}"
+            "</CdtTrfTxInf>"
+        )
+    xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        f'<Document xmlns="{NS}" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
+        "<CstmrCdtTrfInitn>"
+        f"<GrpHdr><MsgId>{escape(msg_id)}</MsgId><CreDtTm>{created.strftime('%Y-%m-%dT%H:%M:%S')}</CreDtTm>"
+        f"<NbOfTxs>{len(payments)}</NbOfTxs><CtrlSum>{total:.2f}</CtrlSum>"
+        f"<InitgPty><Nm>{escape(_clean(debtor_name, 70))}</Nm></InitgPty></GrpHdr>"
+        f"<PmtInf><PmtInfId>{escape(msg_id)}-1</PmtInfId><PmtMtd>TRF</PmtMtd><BtchBookg>false</BtchBookg>"
+        f"<NbOfTxs>{len(payments)}</NbOfTxs><CtrlSum>{total:.2f}</CtrlSum>"
+        f"<ReqdExctnDt><Dt>{execution_date.isoformat()}</Dt></ReqdExctnDt>"
+        f"<Dbtr><Nm>{escape(_clean(debtor_name, 70))}</Nm></Dbtr>"
+        f"<DbtrAcct><Id><IBAN>{debtor_iban}</IBAN></Id></DbtrAcct>"
+        f"<DbtrAgt><FinInstnId><ClrSysMmbId><ClrSysId><Cd>CHBCC</Cd></ClrSysId><MmbId>{iid}</MmbId></ClrSysMmbId></FinInstnId></DbtrAgt>"
+        + "".join(tx)
+        + "</PmtInf></CstmrCdtTrfInitn></Document>"
+    )
+    return xml.encode("utf-8")

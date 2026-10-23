@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from .. import crypto
 from ..config import get_settings
+from . import pain001
 from ..models import Tenant
 
 log = logging.getLogger(__name__)
@@ -292,7 +293,7 @@ class BexioClient:
 def build_bill_payload(*, supplier_id: int, contact_partner_id: int | None, supplier_name: str, document_no: str, title: str,
                        bill_date: str, due_date: str, currency: str, amount_gross: float, account_id: int,
                        tax_id: int | None, text: str, attachment_ids: list[str], qr: dict | None,
-                       bank_account_id: int | None = None, exchange_rate: float | None = None) -> dict:
+                       bank_account_id: int | None = None, exchange_rate: float | None = None, supplier_iban: str = "") -> dict:
     """POST /4.0/purchase/bills body per the bexio OpenAPI spec (required: supplier_id, contact_partner_id, currency_code,
     address, bill_date, due_date, manual_amount, item_net, line_items, discounts, attachment_ids; amount_calc when
     manual_amount is false). Line items carry 'title', not 'text'. Payment: type IBAN | QR | MANUAL with
@@ -307,9 +308,10 @@ def build_bill_payload(*, supplier_id: int, contact_partner_id: int | None, supp
     }
     if tax_id:
         line["tax_id"] = tax_id
+    head = " | ".join(x for x in ((supplier_name or "").strip(), (document_no or "").strip()) if x) or (title or "Rechnung")
     payload = {
         "supplier_id": supplier_id,
-        "title": (title or document_no or "Rechnung")[:80],
+        "title": head[:80],
         "bill_date": bill_date,
         "due_date": due,
         "currency_code": currency or "CHF",
@@ -356,6 +358,21 @@ def build_bill_payload(*, supplier_id: int, contact_partner_id: int | None, supp
         payload["payment"] = pay
         if qr.get("billing_info"):
             payload["qr_bill_information"] = qr["billing_info"][:255]
+    elif supplier_iban and pain001.iban_valid(supplier_iban) and not pain001.is_qr_iban(supplier_iban):
+        # invoice without QR part (e.g. foreign supplier): IBAN payment, invoice number as message
+        pay = {
+            "type": "IBAN",
+            "execution_date": due,
+            "amount": amount,
+            "salary_payment": False,
+            "iban": supplier_iban.replace(" ", "").upper(),
+            "name": (supplier_name or "")[:70] or "Lieferant",
+        }
+        if document_no:
+            pay["message"] = f"Rechnung {document_no}"[:140]
+        if bank_account_id:
+            pay["bank_account_id"] = bank_account_id
+        payload["payment"] = pay
     return payload
 
 

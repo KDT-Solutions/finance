@@ -20,7 +20,7 @@ from .. import __version__
 from ..config import get_settings
 from ..db import SessionLocal
 from ..models import AuditLog, Booking, Document, PaymentAccount, Rule, Supplier, Tenant
-from ..services import actions, audit, bexio as bx, pipeline, rules
+from ..services import actions, audit, bexio as bx, pain001, payments, pipeline, rules
 from ..services.zammad import ZammadClient
 
 log = logging.getLogger(__name__)
@@ -186,6 +186,7 @@ def t_get_settings(db, a):
         "fee_account_no": acc(t.fee_account_id), "fx_diff_account_no": acc(t.fx_diff_account_id),
         "default_tax_code": pipeline._master(t, "taxes", t.default_tax_id).get("code"),
         "bank_account": next(({"id": b["id"], "name": b["name"], "iban": b["iban"]} for b in md.get("bank_accounts", []) if b["id"] == t.bank_account_id), None),
+        "payment_iban": t.payment_iban, "payment_name": t.payment_name,
         "bank_accounts": md.get("bank_accounts", []),
         "payment_accounts": [{"id": p.id, "label": p.label, "kind": p.kind, "card_last4": p.card_last4, "bexio_account_no": p.bexio_account_no, "active": p.active}
                              for p in db.query(PaymentAccount).filter(PaymentAccount.tenant_id == t.id).all()],
@@ -197,6 +198,7 @@ def t_get_settings(db, a):
       {"tenant": TENANT, "default_expense_account_no": {"type": "string"}, "creditor_account_no": {"type": "string"},
        "fee_account_no": {"type": "string"}, "fx_diff_account_no": {"type": "string"}, "default_tax_code": {"type": "string"},
        "bank_account_id": {"type": "integer"}, "zammad_group_paid": {"type": "string"}, "zammad_group_topay": {"type": "string"},
+       "payment_iban": {"type": "string", "description": "IBAN des zahlenden Bankkontos für Zahlfiles"}, "payment_name": {"type": "string"},
        "active": {"type": "boolean"}, "confirm": CONFIRM}, ["tenant"])
 def t_set_settings(db, a):
     t = _tenant(db, a["tenant"])
@@ -216,6 +218,13 @@ def t_set_settings(db, a):
     for key in ("zammad_group_paid", "zammad_group_topay"):
         if a.get(key):
             changes[key] = a[key][:80]
+    if "payment_iban" in a:
+        iban = rules.normalize_iban(a["payment_iban"])
+        if iban and not pain001.iban_valid(iban):
+            raise ToolError("payment_iban ungültig")
+        changes["payment_iban"] = iban or None
+    if "payment_name" in a:
+        changes["payment_name"] = (a["payment_name"] or "")[:70] or None
     if "active" in a:
         changes["active"] = bool(a["active"])
     if not changes:
@@ -681,6 +690,51 @@ def t_fix_open_bill(db, a):
     audit.log(db, "booking.fixed", tenant_id=t.id, actor=ACTOR, entity="booking", entity_id=d.booking.id, details={"tax_code": tx["code"] if tx else None, "account_no": acc["no"] if acc else None, "status": bill.get("status")})
     db.commit()
     return {"ok": True, "bexio_status": bill.get("status"), "bill_id": d.booking.bexio_bill_id}
+
+
+@tool("list_open_payments", "Offene Kreditorenrechnungen aus dem Tool, die noch zu zahlen sind (mit IBAN, Referenz, Mitteilung und Problemen); include_in_file=true zeigt auch die, die schon in einem Zahlfile sind.",
+      {"tenant": TENANT, "include_in_file": {"type": "boolean", "default": False}}, ["tenant"])
+def t_open_payments(db, a):
+    t = _tenant(db, a["tenant"])
+    return payments.open_bills(db, t, include_in_file=bool(a.get("include_in_file")))
+
+
+@tool("create_payment_file", "Zahlfile (pain.001.001.09, Swiss Payment Standard) für offene Rechnungen erstellen; die Rechnungen werden als 'im Zahlfile' markiert und die Tickets bekommen eine Notiz. "
+      "Ohne booking_ids werden alle zahlbaren offenen Rechnungen des Mandanten genommen. Download-URL kommt zurück.",
+      {"tenant": TENANT, "booking_ids": {"type": "array", "items": {"type": "integer"}}, "execution_date": {"type": "string", "description": "YYYY-MM-DD, Standard heute"}, "confirm": CONFIRM}, ["tenant"])
+def t_create_payment_file(db, a):
+    from datetime import datetime as _dt
+
+    t = _tenant(db, a["tenant"])
+    rows = payments.open_bills(db, t)
+    ids = list(a.get("booking_ids") or [r["booking_id"] for r in rows if not r["problems"]])
+    exec_date = _dt.strptime(a["execution_date"], "%Y-%m-%d").date() if a.get("execution_date") else None
+    chosen = [r for r in rows if r["booking_id"] in set(ids)]
+    if not a.get("confirm"):
+        return _preview(f"Zahlfile {t.code} mit {len(chosen)} Zahlungen erstellen", {"payments": chosen, "execution_date": exec_date.isoformat() if exec_date else "heute",
+                                                                                   "payment_iban": t.payment_iban})
+    z = _zammad()
+    try:
+        name, data, used = payments.create_file(db, z, t, ids, exec_date, actor=ACTOR)
+    except ValueError as e:
+        raise ToolError(str(e))
+    finally:
+        if z:
+            z.close()
+    return {"ok": True, "file": name, "count": len(used), "total": round(sum(float(r["amount"]) for r in used), 2),
+            "download": f"{get_settings().public_base_url}/payments/files/{t.code}/{name}", "payments": [{k: r[k] for k in ("supplier", "amount", "currency", "document_number")} for r in used]}
+
+
+@tool("unmark_payment", "Rechnung aus der Zahlfile-Markierung lösen (nur wenn das Zahlfile nicht hochgeladen wurde).",
+      {"booking_id": {"type": "integer"}, "confirm": CONFIRM}, ["booking_id"])
+def t_unmark_payment(db, a):
+    b = db.get(Booking, int(a["booking_id"]))
+    if not b:
+        raise ToolError("Buchung nicht gefunden")
+    if not a.get("confirm"):
+        return _preview(f"Markierung {b.payment_file} von Buchung {b.id} entfernen", {})
+    payments.unmark(db, b, actor=ACTOR)
+    return {"ok": True}
 
 
 # --- JSON-RPC transport ---------------------------------------------------------------

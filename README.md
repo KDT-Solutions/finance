@@ -76,3 +76,11 @@ todo list, document details, booking with corrections, rules (single and bulk up
 tenant settings, master data refresh and the history import. Set `MCP_TOKEN` (bearer token, `openssl rand -hex 32`);
 without it the endpoint is disabled. Writing tools only run with `confirm=true`, otherwise they return a preview.
 Nothing is deleted; rules and payment accounts are deactivated instead.
+
+## Payment files
+
+`Zahlungen` lists the open purchase bills booked by the tool. Selected bills are written to a
+pain.001.001.09 file (Swiss Payment Standard) for upload in e-banking; each tenant needs its debtor IBAN
+and name in the settings. Bills in a file are marked so they are not paid twice; once bexio reports the
+bill as paid (bank sync), the worker closes the ticket. QR-bills carry the QR reference, other invoices
+the invoice number as message.
