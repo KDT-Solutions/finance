@@ -85,11 +85,7 @@ def _supplier(db: Session, t: Tenant, name: str, create: bool) -> Supplier | Non
     key = rules.normalize_name(name or "")
     if not key:
         raise ToolError("Lieferant fehlt")
-    sup = db.query(Supplier).filter(Supplier.tenant_id == t.id, Supplier.name_key == key).first()
-    if not sup:
-        for s in db.query(Supplier).filter(Supplier.tenant_id == t.id).all():
-            if key in [rules.normalize_name(v) for v in (s.name_variants or [])]:
-                return s
+    sup = rules.find_supplier_by_name(db, t.id, name)
     if not sup and create:
         sup = Supplier(tenant_id=t.id, display_name=name.strip()[:200], name_key=key, ibans=[], name_variants=[])
         db.add(sup)
@@ -551,6 +547,26 @@ def t_deactivate_rule(db, a):
     audit.log(db, "rule.deactivated", tenant_id=r.tenant_id, actor=ACTOR, entity="rule", entity_id=r.id)
     db.commit()
     return {"ok": True}
+
+
+@tool("merge_suppliers", "Doppelten Lieferanten zusammenführen: Belege, Regeln, IBANs, Namensvarianten und Adresse von "
+      "source_supplier_id nach target_supplier_id verschieben. Der Quell-Lieferant bleibt leer zurück (nichts wird gelöscht).",
+      {"source_supplier_id": {"type": "integer"}, "target_supplier_id": {"type": "integer"}, "confirm": CONFIRM},
+      ["source_supplier_id", "target_supplier_id"])
+def t_merge_suppliers(db, a):
+    src, dst = db.get(Supplier, int(a["source_supplier_id"])), db.get(Supplier, int(a["target_supplier_id"]))
+    if not src or not dst:
+        raise ToolError("Lieferant nicht gefunden")
+    if src.tenant_id != dst.tenant_id or src.id == dst.id:
+        raise ToolError("Lieferanten müssen verschieden sein und zum gleichen Mandanten gehören")
+    if not a.get("confirm"):
+        return _preview(f"{src.display_name} (#{src.id}) in {dst.display_name} (#{dst.id}) zusammenführen",
+                        {"rules": [r.id for r in src.rules], "ibans": src.ibans or []})
+    out = rules.merge_suppliers(db, src, dst)
+    audit.log(db, "supplier.merged", tenant_id=dst.tenant_id, actor=ACTOR, entity="supplier", entity_id=dst.id,
+              details={"source": src.id, **out})
+    db.commit()
+    return {"ok": True, **out}
 
 
 @tool("list_payment_accounts", "Zahlkonten (Bank, Kreditkarten, privat) je Mandant.", {"tenant": TENANT})

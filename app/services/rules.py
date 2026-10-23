@@ -31,6 +31,53 @@ def normalize_uid(uid: str | None) -> str:
     return f"CHE-{digits[0:3]}.{digits[3:6]}.{digits[6:9]}" if len(digits) == 9 else ""
 
 
+def find_supplier_by_name(db: Session, tenant_id: int, name: str) -> Supplier | None:
+    """Exact match on the normalised name or one of the known name variants."""
+    key = normalize_name(name)
+    if not key:
+        return None
+    suppliers = db.query(Supplier).filter(Supplier.tenant_id == tenant_id).all()
+    for s in suppliers:
+        if s.name_key == key:
+            return s
+    for s in suppliers:
+        if key in [normalize_name(v) for v in (s.name_variants or [])]:
+            return s
+    return None
+
+
+def merge_suppliers(db: Session, source: Supplier, target: Supplier) -> dict:
+    """Move documents and rules from source to target, carry over IBANs, name variants, UID, address and bexio
+    contact (if the target has none). The source stays as an empty record that no name lookup finds any more."""
+    from ..models import Document
+
+    if source.id == target.id or source.tenant_id != target.tenant_id:
+        raise ValueError("Lieferanten müssen verschieden sein und zum gleichen Mandanten gehören")
+    docs = db.query(Document).filter(Document.supplier_id == source.id).all()
+    for d in docs:
+        d.supplier_id = target.id
+    moved_rules = list(source.rules)
+    for r in moved_rules:
+        r.supplier_id = target.id
+    target.ibans = sorted({*(target.ibans or []), *(source.ibans or [])})
+    variants = [*(target.name_variants or [])]
+    for v in [source.display_name, *(source.name_variants or [])]:
+        if v and normalize_name(v) != target.name_key and normalize_name(v) not in [normalize_name(x) for x in variants]:
+            variants.append(v)
+    target.name_variants = variants
+    target.uid = target.uid or source.uid
+    for f in ("street", "postcode", "city", "country"):
+        if not getattr(target, f) and getattr(source, f):
+            setattr(target, f, getattr(source, f))
+    if not target.bexio_contact_id:
+        target.bexio_contact_id = source.bexio_contact_id
+    source.name_key = f"_merged_into_{target.id}"
+    source.name_variants = []
+    source.ibans = []
+    db.flush()
+    return {"documents": len(docs), "rules": len(moved_rules), "source_bexio_contact_id": source.bexio_contact_id}
+
+
 def match_supplier(db: Session, tenant_id: int, *, iban: str = "", uid: str = "", name: str = "") -> tuple[Supplier | None, str]:
     """Returns (supplier, how) with how in iban|uid|name|fuzzy|''."""
     iban = normalize_iban(iban)

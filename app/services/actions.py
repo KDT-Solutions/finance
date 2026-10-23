@@ -17,8 +17,10 @@ def apply_decision(db: Session, doc: Document, dec: dict) -> dict:
     """Store the decision on the document and resolve/rename the supplier from dec['supplier_name']."""
     name = (dec.get("supplier_name") or "").strip()
     if name and (not doc.supplier or rules.normalize_name(name) != doc.supplier.name_key):
-        existing = db.query(Supplier).filter(Supplier.tenant_id == doc.tenant_id, Supplier.name_key == rules.normalize_name(name)).first()
-        if existing:
+        existing = rules.find_supplier_by_name(db, doc.tenant_id, name)
+        if existing and existing is doc.supplier:
+            pass
+        elif existing:
             doc.supplier = existing
         elif doc.supplier and not doc.supplier.rules and db.query(Document).filter(Document.supplier_id == doc.supplier.id).count() <= 1:
             doc.supplier.display_name = name[:200]
