@@ -369,7 +369,7 @@ def payments_page(request: Request, tenant: str = "", msg: str = "", err: str = 
     rows = payments.open_bills(db, t)
     in_file = [r for r in payments.open_bills(db, t, include_in_file=True) if r["payment_file"]]
     return templates.TemplateResponse(request, "payments.html", _ctx(request, db, sess, tenant=t, rows=rows, in_file=in_file, files=payments.list_files(t),
-                                                                      today=now().date().isoformat(), msg=msg, err=err))
+                                                                      today=payments.local_today().isoformat(), msg=msg, err=err))
 
 
 @router.post("/payments/file")

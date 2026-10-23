@@ -43,9 +43,13 @@ def is_qr_iban(iban: str) -> bool:
     return s[:2] in ("CH", "LI") and len(s) >= 9 and 30000 <= int(s[4:9]) <= 31999
 
 
+_ASCII = str.maketrans({"\u2013": "-", "\u2014": "-", "\u2012": "-", "\u2018": "'", "\u2019": "'", "\u201a": "'", "\u201c": '"', "\u201d": '"', "\u201e": '"', "\u00a0": " "})
+
+
 def _clean(text: str, limit: int) -> str:
-    """SPS character set: Latin, no control characters."""
-    t = re.sub(r"[\x00-\x1f\x7f]", " ", text or "")
+    """SPS character set: Latin letters, digits, common punctuation; typographic dashes and quotes mapped to ASCII."""
+    t = (text or "").translate(_ASCII)
+    t = re.sub(r"[\x00-\x1f\x7f]", " ", t)
     t = re.sub(r"\s+", " ", t).strip()
     return t[:limit]
 

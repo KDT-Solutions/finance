@@ -16,6 +16,12 @@ from .zammad import ZammadClient
 log = logging.getLogger(__name__)
 
 
+def local_today() -> date:
+    from zoneinfo import ZoneInfo
+
+    return now().astimezone(ZoneInfo(get_settings().tz)).date()
+
+
 def payment_info(doc: Document) -> dict:
     """What we know for paying this document: IBAN (QR part first, else document), reference, message."""
     ex = doc.extraction
@@ -81,7 +87,12 @@ def create_file(db: Session, z: ZammadClient | None, tenant: Tenant, booking_ids
                                 creditor_name=r["creditor_name"], iban=r["iban"], reference_type=r["reference_type"], reference=r["reference"],
                                 message=r["message"], country=r["country"], address_lines=[r["address"]] if r["address"] else [])
                 for r in rows]
-    created = now()
+    from zoneinfo import ZoneInfo
+
+    created = now().astimezone(ZoneInfo(get_settings().tz))
+    execution_date = execution_date or created.date()
+    if execution_date < created.date():
+        raise ValueError("Ausführungsdatum liegt in der Vergangenheit")
     msg_id = f"FIN{tenant.code}{created.strftime('%Y%m%d%H%M%S')}"
     data = pain001.build(debtor_name=tenant.payment_name or tenant.name, debtor_iban=tenant.payment_iban, payments=payments,
                          execution_date=execution_date, msg_id=msg_id, created=created)
