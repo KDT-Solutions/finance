@@ -14,7 +14,7 @@ from .. import auth
 from ..config import get_settings
 from ..db import SessionLocal
 from ..models import AuditLog, Booking, Document, KV, PaymentAccount, Rule, Supplier, Tenant, now
-from ..services import actions, audit, bexio as bx, payments, pipeline, rules
+from ..services import actions, audit, bexio as bx, pain001, payments, pipeline, rules
 from ..services.zammad import ZammadClient
 
 log = logging.getLogger(__name__)
@@ -369,7 +369,7 @@ def payments_page(request: Request, tenant: str = "", msg: str = "", err: str = 
     rows = payments.open_bills(db, t)
     in_file = [r for r in payments.open_bills(db, t, include_in_file=True) if r["payment_file"]]
     return templates.TemplateResponse(request, "payments.html", _ctx(request, db, sess, tenant=t, rows=rows, in_file=in_file, files=payments.list_files(t),
-                                                                      today=payments.local_today().isoformat(), msg=msg, err=err))
+                                                                      today=pain001.next_bank_day(payments.local_today()).isoformat(), msg=msg, err=err))
 
 
 @router.post("/payments/file")
@@ -485,6 +485,10 @@ async def rule_save(request: Request, rule_id: int, db: Session = Depends(get_db
     sup.uid = rules.normalize_uid(f.get("uid")) or None
     sup.name_variants = [x.strip() for x in (f.get("name_variants") or "").split(",") if x.strip()]
     sup.bexio_contact_id = integer(f.get("bexio_contact_id"))
+    sup.street = (f.get("street") or "").strip()[:100] or None
+    sup.postcode = (f.get("postcode") or "").strip()[:16] or None
+    sup.city = (f.get("city") or "").strip()[:60] or None
+    sup.country = (f.get("country") or "").strip().upper()[:2] or None
     audit.log(db, "rule.saved", tenant_id=r.tenant_id, actor=sess["u"], entity="rule", entity_id=r.id)
     db.commit()
     return RedirectResponse(f"/rules?tenant={t.code}", status_code=303)

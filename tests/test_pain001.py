@@ -16,7 +16,8 @@ def test_iban_checks():
 
 def test_build_file():
     pays = [
-        pain001.Payment("FIN-KDT-1", 7.2, "EUR", "MWC Mobile World Communications GmbH", "DE61100800000221061700", message="Rechnung SB2026-43477", country="DE"),
+        pain001.Payment("FIN-KDT-1", 7.2, "EUR", "MWC Mobile World Communications GmbH", "DE61100800000221061700", message="Rechnung SB2026-43477",
+                        country="DE", street="Musterstr. 1", postcode="10115", town="Berlin"),
         pain001.Payment("FIN-KDT-2", 150.0, "CHF", "Muster AG", "CH4431999123000889012", reference_type="QRR", reference="210000000003139471430009017", country="CH"),
     ]
     data = pain001.build(debtor_name="KDT-Solutions GmbH", debtor_iban="CH93 0076 2011 6238 5295 7", payments=pays,
@@ -30,9 +31,19 @@ def test_build_file():
     assert pi.find("p:DbtrAgt/p:FinInstnId/p:ClrSysMmbId/p:MmbId", ns).text == "762"
     tx = pi.findall("p:CdtTrfTxInf", ns)
     assert tx[0].find("p:RmtInf/p:Ustrd", ns).text == "Rechnung SB2026-43477"
+    assert tx[0].find("p:Cdtr/p:PstlAdr/p:TwnNm", ns).text == "Berlin"
+    assert tx[0].find("p:Cdtr/p:PstlAdr/p:StrtNm", ns).text == "Musterstr. 1"
+    assert tx[1].find("p:Cdtr/p:PstlAdr", ns) is None
+    assert root.find("p:CstmrCdtTrfInitn/p:PmtInf/p:ReqdExctnDt/p:Dt", ns).text == "2026-10-26"  # 24.10. is a Saturday
     assert tx[0].find("p:Amt/p:InstdAmt", ns).get("Ccy") == "EUR"
     assert tx[1].find("p:RmtInf/p:Strd/p:CdtrRefInf/p:Tp/p:CdOrPrtry/p:Prtry", ns).text == "QRR"
     assert tx[1].find("p:RmtInf/p:Strd/p:CdtrRefInf/p:Ref", ns).text == "210000000003139471430009017"
+
+
+def test_foreign_payment_needs_town():
+    with pytest.raises(ValueError):
+        pain001.build(debtor_name="X", debtor_iban="CH9300762011623852957",
+                      payments=[pain001.Payment("a", 1, "EUR", "Y", "DE61100800000221061700", country="DE")])
 
 
 def test_build_rejects_qr_iban_without_reference():

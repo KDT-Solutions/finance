@@ -74,6 +74,11 @@ class Supplier(Base):
     ibans: Mapped[list | None] = mapped_column(JSON, default=list)
     name_variants: Mapped[list | None] = mapped_column(JSON, default=list)
     is_foreign: Mapped[bool] = mapped_column(Boolean, default=False)
+    # postal address for payment files (structured address required by the banks)
+    street: Mapped[str | None] = mapped_column(String(100))
+    postcode: Mapped[str | None] = mapped_column(String(16))
+    city: Mapped[str | None] = mapped_column(String(60))
+    country: Mapped[str | None] = mapped_column(String(2))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
     rules: Mapped[list[Rule]] = relationship(back_populates="supplier")

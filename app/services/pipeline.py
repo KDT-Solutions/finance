@@ -135,6 +135,7 @@ def process_document(db: Session, z: ZammadClient | None, doc: Document) -> None
             supplier = Supplier(tenant_id=tenant.id, display_name=name[:200], name_key=rules.normalize_name(name),
                                 uid=rules.normalize_uid(uid) or None, ibans=[rules.normalize_iban(iban)] if iban else [],
                                 name_variants=[], is_foreign=bool(llm.get("supplier_country") and llm.get("supplier_country") != "CH"))
+            _fill_address(supplier, qr, llm)
             db.add(supplier)
             db.flush()
             how = "new"
@@ -145,6 +146,8 @@ def process_document(db: Session, z: ZammadClient | None, doc: Document) -> None
                 changed = True
             if uid and not supplier.uid:
                 supplier.uid = rules.normalize_uid(uid) or None
+                changed = True
+            if _fill_address(supplier, qr, llm):
                 changed = True
             if name and rules.normalize_name(name) != supplier.name_key and rules.normalize_name(name) not in [rules.normalize_name(v) for v in (supplier.name_variants or [])]:
                 supplier.name_variants = [*(supplier.name_variants or []), name[:200]]
@@ -224,6 +227,26 @@ def _create_bill(db: Session, client: bx.BexioClient, tenant: Tenant, kw: dict) 
             _kv_set(db, key, name)
         return payload, created
     raise last or RuntimeError("create_bill failed")
+
+
+def _fill_address(supplier: Supplier, qr: dict | None, llm: dict) -> bool:
+    """Set the supplier's postal address from the QR part (preferred) or the extraction, only where still empty."""
+    qr = qr or {}
+    street = (qr.get("creditor_street") or "").strip()
+    if street and qr.get("creditor_building"):
+        street = f"{street} {qr['creditor_building'].strip()}"
+    cand = {
+        "street": street or (llm.get("supplier_street") or "").strip(),
+        "postcode": (qr.get("creditor_postcode") or llm.get("supplier_postcode") or "").strip(),
+        "city": (qr.get("creditor_town") or llm.get("supplier_city") or "").strip(),
+        "country": (qr.get("creditor_country") or llm.get("supplier_country") or "").strip().upper()[:2],
+    }
+    changed = False
+    for k, v in cand.items():
+        if v and not getattr(supplier, k):
+            setattr(supplier, k, v[:100] if k == "street" else v[:60])
+            changed = True
+    return changed
 
 
 def _ensure_contact(client: bx.BexioClient, supplier: Supplier, llm: dict) -> int:

@@ -8,6 +8,8 @@
   <label class="wide">IBANs (Komma) <input name="ibans" value="{{ rule.supplier.ibans|join(', ') }}"></label>
   <label>UID <input name="uid" value="{{ rule.supplier.uid or '' }}"></label>
   <label>bexio Kontakt-ID <input name="bexio_contact_id" value="{{ rule.supplier.bexio_contact_id or '' }}"></label>
+  <label>Strasse <input name="street" value="{{ rule.supplier.street or '' }}"></label>
+  <label>PLZ / Ort / Land <span style="display:flex;gap:6px"><input name="postcode" value="{{ rule.supplier.postcode or '' }}" size="6"><input name="city" value="{{ rule.supplier.city or '' }}"><input name="country" value="{{ rule.supplier.country or '' }}" size="2" maxlength="2"></span></label>
   <label class="wide">Namensvarianten (Komma) <input name="name_variants" value="{{ rule.supplier.name_variants|join(', ') }}"></label>
   <label class="wide">Stichwörter für diese Variante (Komma, leer = Standardregel) <input name="keywords" value="{{ rule.keywords|join(', ') }}"></label>
   <label class="wide">Aufwandkonto

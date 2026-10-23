@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import logging
 from dataclasses import asdict, dataclass
 
@@ -21,6 +23,12 @@ class SwissQR:
     message: str
     billing_info: str
     raw: str
+    # structured creditor address (SPC address type S: street, building, postcode, town; K: two address lines)
+    creditor_street: str = ""
+    creditor_building: str = ""
+    creditor_postcode: str = ""
+    creditor_town: str = ""
+    creditor_country: str = ""
 
     @property
     def is_qr_iban(self) -> bool:
@@ -44,10 +52,18 @@ def parse_spc(payload: str) -> SwissQR | None:
         cr_type = lines[4].strip()
         cr = lines[5:11]
         name = cr[0].strip()
+        street = building = postcode = town = ""
         if cr_type == "S":
-            address = f"{cr[1].strip()} {cr[2].strip()}, {cr[3].strip()} {cr[4].strip()} {cr[5].strip()}".strip()
+            street, building, postcode, town = cr[1].strip(), cr[2].strip(), cr[3].strip(), cr[4].strip()
+            address = f"{street} {building}, {postcode} {town} {cr[5].strip()}".strip()
         else:
+            # combined lines: "Strasse 1" / "8000 Zürich"
+            street = cr[1].strip()
+            m = re.match(r"^\s*([A-Z]{0,2}-?\s*\d{4,6})\s+(.+)$", cr[2].strip())
+            if m:
+                postcode, town = m.group(1).strip(), m.group(2).strip()
             address = f"{cr[1].strip()}, {cr[2].strip()} {cr[5].strip()}".strip()
+        country = cr[5].strip()
         amount_s = lines[18].strip()
         amount = float(amount_s) if amount_s else None
         currency = lines[19].strip()
@@ -59,7 +75,8 @@ def parse_spc(payload: str) -> SwissQR | None:
         for extra in lines[31:]:
             if extra.startswith("//S1/"):
                 billing = extra.strip()
-        return SwissQR(iban, name, address, amount, currency, debtor, ref_type, reference, message, billing, payload)
+        return SwissQR(iban, name, address, amount, currency, debtor, ref_type, reference, message, billing, payload,
+                       creditor_street=street, creditor_building=building, creditor_postcode=postcode, creditor_town=town, creditor_country=country)
     except (IndexError, ValueError):
         log.warning("QR payload could not be parsed")
         return None

@@ -28,6 +28,9 @@ class Payment:
     message: str = ""
     country: str = ""
     address_lines: list[str] = field(default_factory=list)
+    street: str = ""
+    postcode: str = ""
+    town: str = ""
 
 
 def iban_valid(iban: str) -> bool:
@@ -59,6 +62,15 @@ def _id(text: str, limit: int = 35) -> str:
     return (t or "X")[:limit]
 
 
+def next_bank_day(d: date) -> date:
+    """Saturday/Sunday -> Monday (public holidays are adjusted by the bank itself)."""
+    from datetime import timedelta
+
+    while d.weekday() >= 5:
+        d += timedelta(days=1)
+    return d
+
+
 def build(*, debtor_name: str, debtor_iban: str, payments: list[Payment], execution_date: date | None = None,
           msg_id: str | None = None, created: datetime | None = None) -> bytes:
     if not iban_valid(debtor_iban):
@@ -69,7 +81,7 @@ def build(*, debtor_name: str, debtor_iban: str, payments: list[Payment], execut
     if not payments:
         raise ValueError("No payments")
     created = created or datetime.now()
-    execution_date = execution_date or created.date()
+    execution_date = next_bank_day(execution_date or created.date())
     msg_id = _id(msg_id or created.strftime("FIN%Y%m%d%H%M%S"))
     total = round(sum(p.amount for p in payments), 2)
     iid = str(int(debtor_iban[4:9]))
@@ -93,10 +105,17 @@ def build(*, debtor_name: str, debtor_iban: str, payments: list[Payment], execut
                    + (f"<AddtlRmtInf>{escape(_clean(p.message, 140))}</AddtlRmtInf>" if p.message else "") + "</Strd></RmtInf>")
         elif p.message:
             rmt = f"<RmtInf><Ustrd>{escape(_clean(p.message, 140))}</Ustrd></RmtInf>"
+        # structured postal address (StrtNm, PstCd, TwnNm, Ctry); the banks require TwnNm whenever PstlAdr is given,
+        # so without a town no address is sent at all
         addr = ""
-        if p.country or p.address_lines:
-            lines = "".join(f"<AdrLine>{escape(_clean(a, 70))}</AdrLine>" for a in p.address_lines[:2] if a)
-            addr = "<PstlAdr>" + (f"<Ctry>{escape(p.country[:2].upper())}</Ctry>" if p.country else "") + lines + "</PstlAdr>"
+        if p.town:
+            parts = [f"<StrtNm>{escape(_clean(p.street, 70))}</StrtNm>" if p.street else "",
+                     f"<PstCd>{escape(_clean(p.postcode, 16))}</PstCd>" if p.postcode else "",
+                     f"<TwnNm>{escape(_clean(p.town, 35))}</TwnNm>",
+                     f"<Ctry>{escape(p.country[:2].upper())}</Ctry>" if p.country else ""]
+            addr = "<PstlAdr>" + "".join(parts) + "</PstlAdr>"
+        if not qr and not p.town and iban[:2] not in ("CH", "LI"):
+            raise ValueError(f"Adresse (Ort) fehlt für Auslandszahlung: {p.creditor_name}")
         tx.append(
             "<CdtTrfTxInf>"
             f"<PmtId><InstrId>{escape(_id(f'{msg_id}-{i}'))}</InstrId><EndToEndId>{escape(_id(p.end_to_end_id))}</EndToEndId></PmtId>"

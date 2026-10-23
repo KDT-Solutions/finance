@@ -37,9 +37,15 @@ def payment_info(doc: Document) -> dict:
     docno = dec.get("document_number") or ""
     message = qr.get("message") or (f"Rechnung {docno}" if docno else "")
     name = qr.get("creditor_name") or (sup.display_name if sup else dec.get("supplier_name")) or ""
-    country = (llm.get("supplier_country") or "").upper()
+    country = (qr.get("creditor_country") or llm.get("supplier_country") or (sup.country if sup else "") or "").upper()
     if not country and iban:
         country = iban[:2]
+    street = (qr.get("creditor_street") or "").strip()
+    if street and qr.get("creditor_building"):
+        street = f"{street} {qr['creditor_building'].strip()}"
+    street = street or (llm.get("supplier_street") or "").strip() or (sup.street if sup else "") or ""
+    postcode = (qr.get("creditor_postcode") or llm.get("supplier_postcode") or (sup.postcode if sup else "") or "").strip()
+    town = (qr.get("creditor_town") or llm.get("supplier_city") or (sup.city if sup else "") or "").strip()
     problems = []
     if not iban:
         problems.append("keine IBAN")
@@ -47,10 +53,12 @@ def payment_info(doc: Document) -> dict:
         problems.append("IBAN ungültig")
     elif pain001.is_qr_iban(iban) and ref_type != "QRR":
         problems.append("QR-IBAN ohne QR-Referenz")
+    elif iban[:2] not in ("CH", "LI") and not town:
+        problems.append("Adresse (Ort) des Empfängers fehlt")
     if not (dec.get("amount") or 0) > 0:
         problems.append("Betrag fehlt")
     return {"iban": iban, "reference_type": ref_type, "reference": reference, "message": message, "creditor_name": name,
-            "country": country, "address": qr.get("creditor_address") or "", "problems": problems}
+            "country": country, "street": street, "postcode": postcode, "town": town, "problems": problems}
 
 
 def open_bills(db: Session, tenant: Tenant, include_in_file: bool = False) -> list[dict]:
@@ -85,12 +93,12 @@ def create_file(db: Session, z: ZammadClient | None, tenant: Tenant, booking_ids
         raise ValueError("Schon in einem Zahlfile: " + ", ".join(f"{r['supplier']} ({r['payment_file']})" for r in already))
     payments = [pain001.Payment(end_to_end_id=f"FIN-{tenant.code}-{r['booking_id']}", amount=float(r["amount"]), currency=r["currency"],
                                 creditor_name=r["creditor_name"], iban=r["iban"], reference_type=r["reference_type"], reference=r["reference"],
-                                message=r["message"], country=r["country"], address_lines=[r["address"]] if r["address"] else [])
+                                message=r["message"], country=r["country"], street=r["street"], postcode=r["postcode"], town=r["town"])
                 for r in rows]
     from zoneinfo import ZoneInfo
 
     created = now().astimezone(ZoneInfo(get_settings().tz))
-    execution_date = execution_date or created.date()
+    execution_date = pain001.next_bank_day(execution_date or created.date())
     if execution_date < created.date():
         raise ValueError("Ausführungsdatum liegt in der Vergangenheit")
     msg_id = f"FIN{tenant.code}{created.strftime('%Y%m%d%H%M%S')}"

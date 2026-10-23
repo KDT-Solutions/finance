@@ -113,6 +113,7 @@ def _rule_dict(r: Rule) -> dict:
         "amount_min": r.amount_min, "amount_max": r.amount_max, "auto_book": r.auto_book, "active": r.active,
         "learned_from": r.learned_from, "hits": r.hits,
         "supplier_ibans": r.supplier.ibans or [], "supplier_uid": r.supplier.uid, "name_variants": r.supplier.name_variants or [],
+        "address": {"street": r.supplier.street, "postcode": r.supplier.postcode, "city": r.supplier.city, "country": r.supplier.country},
         "bexio_contact_id": r.supplier.bexio_contact_id,
     }
 
@@ -132,7 +133,7 @@ def _doc_dict(d: Document, full: bool = False) -> dict:
     }
     if full:
         ex = d.extraction
-        out["extraction"] = {"qr": ex.qr if ex else None, "llm": ex.llm if ex else None, "model": ex.model if ex else None}
+        out["extraction"] = {"qr": ex.qr if ex else None, "llm": ex.llm if ex else None, "model": ex.model if ex else None, "text_excerpt": (ex.text_excerpt or "")[:3000] if ex else None}
         out["decision"] = dec
         out["rule_id"] = d.rule_id
         if d.booking:
@@ -430,6 +431,7 @@ RULE_PROPS = {
     "amount_min": {"type": "number"}, "amount_max": {"type": "number"}, "auto_book": {"type": "boolean"}, "active": {"type": "boolean"},
     "ibans": {"type": "array", "items": {"type": "string"}}, "uid": {"type": "string", "description": "CHE-Nummer"},
     "name_variants": {"type": "array", "items": {"type": "string"}}, "bexio_contact_id": {"type": "integer"},
+    "street": {"type": "string", "description": "Postadresse des Lieferanten (für Zahlfiles)"}, "postcode": {"type": "string"}, "city": {"type": "string"}, "country": {"type": "string", "description": "ISO-2"},
 }
 
 
@@ -479,6 +481,11 @@ def _upsert_rule(db: Session, t: Tenant, spec: dict) -> tuple[Rule, bool, dict]:
     if "bexio_contact_id" in spec:
         sup.bexio_contact_id = spec["bexio_contact_id"]
         changes["bexio_contact_id"] = sup.bexio_contact_id
+    for k in ("street", "postcode", "city", "country"):
+        if k in spec:
+            v = (spec[k] or "").strip()
+            setattr(sup, k, (v.upper()[:2] if k == "country" else v[:100]) or None)
+            changes[k] = getattr(sup, k)
     if not created:
         rule.learned_from = "mcp"
     db.flush()
