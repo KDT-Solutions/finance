@@ -12,20 +12,20 @@
 {% if not rows %}<p class="empty">Keine offenen Zahlungen.</p>{% else %}
 <form method="post" action="/payments/file" data-confirm="Zahlfile für die markierten Rechnungen erstellen? Die Rechnungen werden als 'im Zahlfile' markiert.">
 <input type="hidden" name="csrf" value="{{ sess.csrf }}"><input type="hidden" name="tenant" value="{{ tenant.code }}">
-<table>
+<table class="cards">
 <thead><tr><th></th><th>Lieferant</th><th>Beleg-Nr.</th><th>Fällig</th><th class="r">Betrag</th><th>IBAN</th><th>Referenz / Mitteilung</th><th>Ticket</th><th></th></tr></thead>
 <tbody>
 {% for r in rows %}
 <tr class="{{ 'off' if r.problems }}">
-  <td>{% if not r.problems %}<input type="checkbox" name="booking_id" value="{{ r.booking_id }}" checked>{% endif %}</td>
-  <td><a href="/docs/{{ r.document_id }}">{{ r.supplier }}</a></td>
-  <td>{{ r.document_number or '' }}</td>
-  <td>{{ r.due_date or '' }}</td>
-  <td class="r">{{ r.currency }} {{ '%.2f'|format(r.amount or 0) }}</td>
-  <td class="muted">{{ r.iban }}</td>
-  <td class="muted">{% if r.reference_type %}{{ r.reference_type }} {{ r.reference }}{% else %}{{ r.message }}{% endif %}</td>
-  <td>{% if r.ticket %}#{{ r.ticket }}{% endif %}</td>
-  <td class="error">{{ r.problems|join(', ') }}</td>
+  <td data-label="Zahlen">{% if not r.problems %}<input type="checkbox" name="booking_id" value="{{ r.booking_id }}" checked>{% endif %}</td>
+  <td data-label="Lieferant"><a href="/docs/{{ r.document_id }}">{{ r.supplier }}</a></td>
+  <td data-label="Beleg-Nr.">{{ r.document_number or '' }}</td>
+  <td data-label="Fällig">{{ r.due_date or '' }}</td>
+  <td class="r" data-label="Betrag">{{ r.currency }} {{ '%.2f'|format(r.amount or 0) }}</td>
+  <td class="muted" data-label="IBAN">{{ r.iban }}</td>
+  <td class="muted" data-label="Referenz">{% if r.reference_type %}{{ r.reference_type }} {{ r.reference }}{% else %}{{ r.message }}{% endif %}</td>
+  <td data-label="Ticket">{% if r.ticket %}#{{ r.ticket }}{% endif %}</td>
+  <td class="error" data-label="Problem">{{ r.problems|join(', ') }}</td>
 </tr>
 {% endfor %}
 </tbody></table>
@@ -38,17 +38,17 @@
 
 {% if in_file %}
 <h3>Im Zahlfile, warten auf Banksync</h3>
-<table>
+<table class="cards">
 <thead><tr><th>Lieferant</th><th>Beleg-Nr.</th><th class="r">Betrag</th><th>Zahlfile</th><th>Ticket</th><th></th></tr></thead>
 <tbody>
 {% for r in in_file %}
 <tr>
-  <td><a href="/docs/{{ r.document_id }}">{{ r.supplier }}</a></td>
-  <td>{{ r.document_number or '' }}</td>
-  <td class="r">{{ r.currency }} {{ '%.2f'|format(r.amount or 0) }}</td>
-  <td class="muted">{{ r.payment_file }} · {{ r.payment_file_at.strftime('%d.%m.%y %H:%M') if r.payment_file_at }}</td>
-  <td>{% if r.ticket %}#{{ r.ticket }}{% endif %}</td>
-  <td><form method="post" action="/payments/unmark/{{ r.booking_id }}" class="inline" data-confirm="Markierung entfernen? Nur wenn das Zahlfile nicht hochgeladen wurde, sonst wird doppelt bezahlt."><input type="hidden" name="csrf" value="{{ sess.csrf }}"><button class="link">nicht hochgeladen</button></form></td>
+  <td data-label="Lieferant"><a href="/docs/{{ r.document_id }}">{{ r.supplier }}</a></td>
+  <td data-label="Beleg-Nr.">{{ r.document_number or '' }}</td>
+  <td class="r" data-label="Betrag">{{ r.currency }} {{ '%.2f'|format(r.amount or 0) }}</td>
+  <td class="muted" data-label="Zahlfile">{{ r.payment_file }} · {{ r.payment_file_at.strftime('%d.%m.%y %H:%M') if r.payment_file_at }}</td>
+  <td data-label="Ticket">{% if r.ticket %}#{{ r.ticket }}{% endif %}</td>
+  <td class="actions-cell"><form method="post" action="/payments/unmark/{{ r.booking_id }}" class="inline" data-confirm="Markierung entfernen? Nur wenn das Zahlfile nicht hochgeladen wurde, sonst wird doppelt bezahlt."><input type="hidden" name="csrf" value="{{ sess.csrf }}"><button class="link">nicht hochgeladen</button></form></td>
 </tr>
 {% endfor %}
 </tbody></table>

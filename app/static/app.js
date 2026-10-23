@@ -12,3 +12,12 @@ document.addEventListener("click", function (ev) {
   if (!row || ev.target.closest("a, button, input, select, form")) return;
   window.location.href = row.dataset.href;
 });
+
+// Horizontal scroll container for wide tables on small screens (card tables excluded).
+document.querySelectorAll("table:not(.cards)").forEach(function (t) {
+  if (t.parentElement && t.parentElement.classList.contains("tw")) return;
+  var w = document.createElement("div");
+  w.className = "tw";
+  t.parentNode.insertBefore(w, t);
+  w.appendChild(t);
+});

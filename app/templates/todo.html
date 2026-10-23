@@ -20,19 +20,19 @@
   </form>
 </div>
 {% if not docs %}<p class="empty">Nichts zu tun.</p>{% else %}
-<table>
+<table class="cards">
 <thead><tr><th>Mandant</th><th>Eingang</th><th>Ticket</th><th>Lieferant</th><th class="r">Betrag</th><th>Status</th><th>Grund</th><th></th></tr></thead>
 <tbody>
 {% for d in docs %}{% set dec = d.decision or {} %}
 <tr class="row" data-href="/docs/{{ d.id }}">
-  <td>{{ d.tenant.code }}</td>
-  <td>{{ d.received_at.strftime('%d.%m.%y') }}</td>
-  <td>{% if d.zammad_ticket_number %}#{{ d.zammad_ticket_number }}{% else %}Upload{% endif %}</td>
-  <td><a href="/docs/{{ d.id }}">{{ dec.get('supplier_name') or d.filename }}</a></td>
-  <td class="r">{% if dec.get('amount') %}{{ dec.get('currency','CHF') }} {{ '%.2f'|format(dec.amount) }}{% endif %}</td>
-  <td><span class="state {{ d.state }}">{{ d.state }}</span></td>
-  <td class="muted">{{ d.review_reason or d.last_error or '' }}</td>
-  <td><a class="btn" href="/docs/{{ d.id }}">Öffnen</a></td>
+  <td data-label="Mandant">{{ d.tenant.code }}</td>
+  <td data-label="Eingang">{{ d.received_at.strftime('%d.%m.%y') }}</td>
+  <td data-label="Ticket">{% if d.zammad_ticket_number %}#{{ d.zammad_ticket_number }}{% else %}Upload{% endif %}</td>
+  <td data-label="Lieferant"><a href="/docs/{{ d.id }}">{{ dec.get('supplier_name') or d.filename }}</a></td>
+  <td class="r" data-label="Betrag">{% if dec.get('amount') %}{{ dec.get('currency','CHF') }} {{ '%.2f'|format(dec.amount) }}{% endif %}</td>
+  <td data-label="Status"><span class="state {{ d.state }}">{{ d.state }}</span></td>
+  <td class="muted" data-label="Grund">{{ d.review_reason or d.last_error or '' }}</td>
+  <td class="actions-cell"><a class="btn" href="/docs/{{ d.id }}">Öffnen</a></td>
 </tr>
 {% endfor %}
 </tbody></table>
