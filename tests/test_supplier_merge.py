@@ -31,3 +31,15 @@ def test_variant_lookup_and_merge():
     assert out["rules"] == 1 and a.city == "Berlin" and a.bexio_contact_id == 405
     assert out["source_bexio_contact_id"] == 550
     assert rules.find_supplier_by_name(db, t.id, "x") is None
+
+
+def test_dedup_plan():
+    from app.services.contact_dedup import plan
+
+    g = {"key": "x", "contacts": [
+        {"id": 1, "bills_open": [], "bills_paid": 3, "expenses": 0, "sales_documents": 0},
+        {"id": 2, "bills_open": [{"id": "a"}], "bills_paid": 0, "expenses": 0, "sales_documents": 0},
+        {"id": 3, "bills_open": [], "bills_paid": 0, "expenses": 0, "sales_documents": 0},
+        {"id": 4, "bills_open": [], "bills_paid": 1, "expenses": 0, "sales_documents": 0}]}
+    plan(g, 1)
+    assert [r["action"] for r in g["contacts"]] == ["main", "move", "archive", "mark"]

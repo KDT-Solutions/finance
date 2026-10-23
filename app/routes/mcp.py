@@ -664,6 +664,57 @@ def t_bexio_bill(db, a):
     return bill
 
 
+@tool("bexio_duplicate_contacts", "Doppelte Kontakte in bexio finden (gleicher Name, Schreibweise egal). Pro Kontakt: offene und bezahlte "
+      "Kreditorenrechnungen, Ausgaben, Verkaufsdokumente und die geplante Aktion (main = bleibt, archive = archivieren, "
+      "move = offene Rechnungen auf Hauptkontakt umhängen und archivieren, mark = als Duplikat kennzeichnen). Nur lesend.",
+      {"tenant": TENANT}, ["tenant"])
+def t_bexio_duplicates(db, a):
+    from ..services import contact_dedup
+
+    t = _tenant(db, a["tenant"])
+    c = bx.BexioClient(db, t)
+    try:
+        groups = contact_dedup.analyze(db, c, t)
+    finally:
+        c.close()
+    summary = {k: sum(1 for g in groups for r in g["contacts"] if r["action"] == k) for k in ("archive", "move", "mark")}
+    return {"tenant": t.code, "groups": len(groups), "summary": summary, "duplicates": groups}
+
+
+@tool("clean_duplicate_contacts", "Doppelte bexio-Kontakte bereinigen gemäss bexio_duplicate_contacts. keys: nur diese Gruppen (Schlüssel aus der Analyse), "
+      "leer = alle. main: {Schlüssel: Kontakt-ID} legt den Hauptkontakt einer Gruppe abweichend fest. Ohne confirm nur Vorschau.",
+      {"tenant": TENANT, "keys": {"type": "array", "items": {"type": "string"}},
+       "main": {"type": "object", "additionalProperties": {"type": "integer"}}, "confirm": CONFIRM}, ["tenant"])
+def t_clean_duplicates(db, a):
+    from ..services import contact_dedup
+
+    t = _tenant(db, a["tenant"])
+    c = bx.BexioClient(db, t)
+    try:
+        groups = contact_dedup.analyze(db, c, t)
+        if a.get("keys"):
+            groups = [g for g in groups if g["key"] in a["keys"]]
+        for key, main_id in (a.get("main") or {}).items():
+            for g in groups:
+                if g["key"] == key:
+                    try:
+                        contact_dedup.plan(g, int(main_id))
+                    except ValueError as e:
+                        raise ToolError(str(e)) from e
+        if not a.get("confirm"):
+            return _preview(f"{len(groups)} Duplikatgruppen in {t.code} bereinigen",
+                            {"groups": [{"key": g["key"], "main": g["main_contact_id"],
+                                         "contacts": [{k: r[k] for k in ("id", "name", "action")} for r in g["contacts"]]} for g in groups]})
+        results = []
+        for g in groups:
+            results.extend(contact_dedup.clean_group(db, c, t, g))
+    finally:
+        c.close()
+    audit.log(db, "bexio.duplicates_cleaned", tenant_id=t.id, actor=ACTOR, entity="tenant", entity_id=t.id, details={"results": results})
+    db.commit()
+    return {"ok": all(r["ok"] for r in results), "results": results}
+
+
 @tool("fix_open_bill", "Offene bexio-Rechnung eines Belegs korrigieren und verbuchen: Steuercode und/oder Konto auf den Positionen setzen, danach Status BOOKED. "
       "Für Belege, deren Rechnung in bexio noch als Entwurf (DRAFT) steht, z.B. nach PURCHASES.VALIDATION.TAX_INCORRECT.",
       {"id": {"type": "integer", "description": "Beleg-ID"}, "tax_code": {"type": "string"}, "account_no": {"type": "string"},
