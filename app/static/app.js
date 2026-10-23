@@ -5,3 +5,10 @@ document.addEventListener("submit", function (ev) {
     ev.preventDefault();
   }
 });
+
+// Clickable table rows (data-href), links and buttons inside keep their own behaviour.
+document.addEventListener("click", function (ev) {
+  var row = ev.target.closest && ev.target.closest("tr[data-href]");
+  if (!row || ev.target.closest("a, button, input, select, form")) return;
+  window.location.href = row.dataset.href;
+});
