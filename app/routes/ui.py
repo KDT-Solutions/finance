@@ -56,6 +56,34 @@ def _tenant_or_404(db: Session, code: str) -> Tenant:
     return t
 
 
+
+def _resolve_account(tenant: Tenant, value) -> int | None:
+    """Form value of an account picker: account number (preferred), 'no name', or a bexio id."""
+    v = (str(value or "")).strip()
+    if not v:
+        return None
+    first = v.split()[0]
+    accounts = (tenant.master_data or {}).get("accounts", [])
+    for a in accounts:
+        if a.get("no") == first:
+            return a["id"]
+    for a in accounts:
+        if str(a.get("id")) == first:
+            return a["id"]
+    return None
+
+
+def _resolve_tax(tenant: Tenant, value) -> int | None:
+    v = (str(value or "")).strip()
+    if not v:
+        return None
+    first = v.split()[0]
+    for x in (tenant.master_data or {}).get("taxes", []):
+        if x.get("code") == first or str(x.get("id")) == first:
+            return x["id"]
+    return None
+
+
 # --- auth --------------------------------------------------------------------------
 @router.get("/login", response_class=HTMLResponse)
 def login_form(request: Request):
@@ -133,8 +161,8 @@ def _apply_form(db: Session, doc: Document, form) -> dict:
             return None
 
     dec["supplier_name"] = (form.get("supplier_name") or dec.get("supplier_name") or "").strip()
-    dec["account_id"] = integer(form.get("account_id"))
-    dec["tax_id"] = integer(form.get("tax_id"))
+    dec["account_id"] = _resolve_account(doc.tenant, form.get("account_no")) if "account_no" in form else integer(form.get("account_id"))
+    dec["tax_id"] = _resolve_tax(doc.tenant, form.get("tax_code")) if "tax_code" in form else integer(form.get("tax_id"))
     dec["payment_mode"] = form.get("payment_mode") or "open"
     dec["payment_account_id"] = integer(form.get("payment_account_id")) if dec["payment_mode"] != "open" else None
     dec["booking_text"] = (form.get("booking_text") or "").strip()[:200]
@@ -328,8 +356,9 @@ async def rule_save(request: Request, rule_id: int, db: Session = Depends(get_db
         except (TypeError, ValueError):
             return None
 
-    r.account_id = integer(f.get("account_id"))
-    r.tax_id = integer(f.get("tax_id"))
+    t = db.get(Tenant, r.tenant_id)
+    r.account_id = _resolve_account(t, f.get("account_no"))
+    r.tax_id = _resolve_tax(t, f.get("tax_code"))
     r.booking_text = (f.get("booking_text") or "")[:200]
     r.payment_mode = f.get("payment_mode") or "open"
     r.payment_account_id = integer(f.get("payment_account_id")) if r.payment_mode != "open" else None
@@ -346,7 +375,7 @@ async def rule_save(request: Request, rule_id: int, db: Session = Depends(get_db
     sup.bexio_contact_id = integer(f.get("bexio_contact_id"))
     audit.log(db, "rule.saved", tenant_id=r.tenant_id, actor=sess["u"], entity="rule", entity_id=r.id)
     db.commit()
-    return RedirectResponse(f"/rules?tenant={db.get(Tenant, r.tenant_id).code}", status_code=303)
+    return RedirectResponse(f"/rules?tenant={t.code}", status_code=303)
 
 
 @router.get("/accounts", response_class=HTMLResponse)
@@ -364,10 +393,7 @@ async def account_save(request: Request, db: Session = Depends(get_db), sess: di
     pa.label = (f.get("label") or "")[:80]
     pa.kind = f.get("kind") or "card"
     pa.card_last4 = (f.get("card_last4") or "")[-4:] or None
-    try:
-        pa.bexio_account_id = int(f.get("bexio_account_id")) if f.get("bexio_account_id") else None
-    except ValueError:
-        pa.bexio_account_id = None
+    pa.bexio_account_id = _resolve_account(t, f.get("bexio_account_no"))
     pa.bexio_account_no = pipeline._master(t, "accounts", pa.bexio_account_id).get("no")
     pa.active = f.get("active", "1") == "1"
     db.add(pa)
@@ -414,11 +440,11 @@ async def tenant_save(request: Request, code: str, db: Session = Depends(get_db)
 
     t.zammad_group_paid = (f.get("zammad_group_paid") or t.zammad_group_paid)[:80]
     t.zammad_group_topay = (f.get("zammad_group_topay") or t.zammad_group_topay)[:80]
-    t.creditor_account_id = integer(f.get("creditor_account_id"))
-    t.default_expense_account_id = integer(f.get("default_expense_account_id"))
-    t.default_tax_id = integer(f.get("default_tax_id"))
-    t.fx_diff_account_id = integer(f.get("fx_diff_account_id"))
-    t.fee_account_id = integer(f.get("fee_account_id"))
+    t.creditor_account_id = _resolve_account(t, f.get("creditor_account_no"))
+    t.default_expense_account_id = _resolve_account(t, f.get("default_expense_account_no"))
+    t.default_tax_id = _resolve_tax(t, f.get("default_tax_code"))
+    t.fx_diff_account_id = _resolve_account(t, f.get("fx_diff_account_no"))
+    t.fee_account_id = _resolve_account(t, f.get("fee_account_no"))
     t.bank_account_id = integer(f.get("bank_account_id"))
     t.active = f.get("active", "1") == "1"
     audit.log(db, "tenant.saved", tenant_id=t.id, actor=sess["u"], entity="tenant", entity_id=t.id)

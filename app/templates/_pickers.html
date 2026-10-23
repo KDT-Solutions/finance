@@ -1,0 +1,28 @@
+{# Searchable pickers: a text input with a datalist (type number or name, the browser filters), sorted by account number.
+   The form field carries the account number / tax code; the server resolves it to the bexio id.
+   Use *_datalist once per page/tenant and *_input for each field that shares it. #}
+{% macro account_datalist(list_id, accounts) -%}
+<datalist id="{{ list_id }}">{% for a in accounts|sort(attribute='no') %}<option value="{{ a.no }}">{{ a.no }} {{ a.name }}</option>{% endfor %}</datalist>
+{%- endmacro %}
+
+{% macro account_input(name, accounts, selected_id, list_id, required=False) -%}
+{% set sel = (accounts|selectattr('id', 'equalto', selected_id)|list)[0] if selected_id else none %}
+<input name="{{ name }}" list="{{ list_id }}" value="{{ sel.no if sel else '' }}" placeholder="Kontonummer oder Name" autocomplete="off" class="picker" {{ 'required' if required }}>
+{%- endmacro %}
+
+{% macro account_picker(name, accounts, selected_id, required=False, list_id='dl-accounts') -%}
+{{ account_input(name, accounts, selected_id, list_id, required) }}{{ account_datalist(list_id, accounts) }}
+{%- endmacro %}
+
+{% macro tax_datalist(list_id, taxes) -%}
+<datalist id="{{ list_id }}">{% for x in taxes|sort(attribute='code') if x.active %}<option value="{{ x.code }}">{{ x.code }} {{ x.name }}{% if x.rate is not none %} ({{ x.rate }}%){% endif %}</option>{% endfor %}</datalist>
+{%- endmacro %}
+
+{% macro tax_input(name, taxes, selected_id, list_id) -%}
+{% set sel = (taxes|selectattr('id', 'equalto', selected_id)|list)[0] if selected_id else none %}
+<input name="{{ name }}" list="{{ list_id }}" value="{{ sel.code if sel else '' }}" placeholder="Steuercode" autocomplete="off" class="picker">
+{%- endmacro %}
+
+{% macro tax_picker(name, taxes, selected_id, list_id='dl-taxes') -%}
+{{ tax_input(name, taxes, selected_id, list_id) }}{{ tax_datalist(list_id, taxes) }}
+{%- endmacro %}

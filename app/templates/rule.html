@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Regel {{ rule.supplier.display_name }} – finance{% endblock %}
+{% from "_pickers.html" import account_picker, tax_picker %}
 {% block content %}
 <h2>{{ t.code }} · {{ rule.supplier.display_name }}</h2>
 <form method="post" action="/rules/{{ rule.id }}" class="grid card">
@@ -10,10 +11,10 @@
   <label class="wide">Namensvarianten (Komma) <input name="name_variants" value="{{ rule.supplier.name_variants|join(', ') }}"></label>
   <label class="wide">Stichwörter für diese Variante (Komma, leer = Standardregel) <input name="keywords" value="{{ rule.keywords|join(', ') }}"></label>
   <label class="wide">Aufwandkonto
-    <select name="account_id"><option value="">–</option>{% for a in md.get('accounts', []) %}<option value="{{ a.id }}" {{ 'selected' if a.id == rule.account_id }}>{{ a.no }} {{ a.name }}</option>{% endfor %}</select>
+    {{ account_picker('account_no', md.get('accounts', []), rule.account_id, list_id='dl-accounts') }}
   </label>
   <label class="wide">Steuercode
-    <select name="tax_id"><option value="">–</option>{% for x in md.get('taxes', []) if x.active %}<option value="{{ x.id }}" {{ 'selected' if x.id == rule.tax_id }}>{{ x.code }} {{ x.name }}</option>{% endfor %}</select>
+    {{ tax_picker('tax_code', md.get('taxes', []), rule.tax_id, list_id='dl-taxes') }}
   </label>
   <label>Zahlung
     <select name="payment_mode">

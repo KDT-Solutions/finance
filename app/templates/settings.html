@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Einstellungen – finance{% endblock %}
+{% from "_pickers.html" import account_input, account_datalist, tax_picker %}
 {% block content %}
 <h2>Einstellungen</h2>
 {% if msg %}<p class="ok">{{ msg }}</p>{% endif %}
@@ -23,14 +24,15 @@
     <label>Zammad-Gruppe Belege <input name="zammad_group_paid" value="{{ t.zammad_group_paid }}"></label>
     <label>Zammad-Gruppe toPay <input name="zammad_group_topay" value="{{ t.zammad_group_topay }}"></label>
     {% set md = t.master_data or {} %}
-    <label>Standard-Aufwandkonto <select name="default_expense_account_id"><option value="">–</option>{% for a in md.get('accounts', []) %}<option value="{{ a.id }}" {{ 'selected' if a.id == t.default_expense_account_id }}>{{ a.no }} {{ a.name }}</option>{% endfor %}</select></label>
-    <label>Standard-Steuercode <select name="default_tax_id"><option value="">–</option>{% for x in md.get('taxes', []) if x.active %}<option value="{{ x.id }}" {{ 'selected' if x.id == t.default_tax_id }}>{{ x.code }} {{ x.name }}</option>{% endfor %}</select></label>
-    <label>Kreditorenkonto <select name="creditor_account_id"><option value="">–</option>{% for a in md.get('accounts', []) %}<option value="{{ a.id }}" {{ 'selected' if a.id == t.creditor_account_id }}>{{ a.no }} {{ a.name }}</option>{% endfor %}</select></label>
-    <label>Kursdifferenzen <select name="fx_diff_account_id"><option value="">–</option>{% for a in md.get('accounts', []) %}<option value="{{ a.id }}" {{ 'selected' if a.id == t.fx_diff_account_id }}>{{ a.no }} {{ a.name }}</option>{% endfor %}</select></label>
+    <label>Standard-Aufwandkonto {{ account_input('default_expense_account_no', md.get('accounts', []), t.default_expense_account_id, 'dl-acc-' ~ t.code) }}</label>
+    <label>Standard-Steuercode {{ tax_picker('default_tax_code', md.get('taxes', []), t.default_tax_id, list_id='dl-tax-' ~ t.code) }}</label>
+    <label>Kreditorenkonto {{ account_input('creditor_account_no', md.get('accounts', []), t.creditor_account_id, 'dl-acc-' ~ t.code) }}</label>
+    <label>Kursdifferenzen {{ account_input('fx_diff_account_no', md.get('accounts', []), t.fx_diff_account_id, 'dl-acc-' ~ t.code) }}</label>
     <label>Bankkonto für Zahlungen <select name="bank_account_id"><option value="">–</option>{% for b in md.get('bank_accounts', []) %}<option value="{{ b.id }}" {{ 'selected' if b.id == t.bank_account_id }}>{{ b.name }} {{ b.iban }}</option>{% endfor %}</select></label>
-    <label>Gebühren <select name="fee_account_id"><option value="">–</option>{% for a in md.get('accounts', []) %}<option value="{{ a.id }}" {{ 'selected' if a.id == t.fee_account_id }}>{{ a.no }} {{ a.name }}</option>{% endfor %}</select></label>
+    <label>Gebühren {{ account_input('fee_account_no', md.get('accounts', []), t.fee_account_id, 'dl-acc-' ~ t.code) }}</label>
     <label>Aktiv <select name="active"><option value="1" {{ 'selected' if t.active }}>ja</option><option value="0" {{ 'selected' if not t.active }}>nein</option></select></label>
     <div class="actions wide"><button>Speichern</button></div>
+    {{ account_datalist('dl-acc-' ~ t.code, md.get('accounts', [])) }}
   </form>
 </section>
 {% endfor %}

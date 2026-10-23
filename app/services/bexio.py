@@ -159,7 +159,7 @@ class BexioClient:
 
     def refresh_master_data(self) -> dict:
         data = {
-            "accounts": [{"id": a["id"], "no": str(a.get("account_no", "")), "name": a.get("name", ""), "type": a.get("account_type")} for a in self.accounts()],
+            "accounts": sorted(({"id": a["id"], "no": str(a.get("account_no", "")), "name": a.get("name", ""), "type": a.get("account_type")} for a in self.accounts()), key=lambda a: a["no"]),
             "taxes": [{"id": t["id"], "code": t.get("code", ""), "name": t.get("name") or t.get("display_name", ""), "rate": t.get("value") or t.get("percentage"), "type": t.get("type"), "active": t.get("is_active", True)} for t in self.taxes()],
             "currencies": [{"id": c["id"], "code": c.get("name") or c.get("currency_code", "")} for c in self.currencies()],
             "bank_accounts": [{"id": b["id"], "name": b.get("name", ""), "iban": b.get("iban", ""), "account_id": b.get("account_id")} for b in self.bank_accounts()],

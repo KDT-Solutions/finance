@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Beleg {{ doc.id }} – finance{% endblock %}
+{% from "_pickers.html" import account_picker, tax_picker %}
 {% block content %}
 {% set llm = (extraction.llm if extraction else {}) or {} %}
 {% set qr = (extraction.qr if extraction else none) %}
@@ -39,16 +40,10 @@
       <label>Betrag <input name="amount" value="{{ '%.2f'|format(dec.amount) if dec.amount else '' }}" required inputmode="decimal"></label>
       <label>Währung <input name="currency" value="{{ dec.currency or 'CHF' }}" maxlength="3"></label>
       <label class="wide">Aufwandkonto
-        <select name="account_id" required>
-          <option value="">–</option>
-          {% for a in md.get('accounts', []) %}<option value="{{ a.id }}" {{ 'selected' if a.id == dec.account_id }}>{{ a.no }} {{ a.name }}</option>{% endfor %}
-        </select>
+        {{ account_picker('account_no', md.get('accounts', []), dec.account_id, required=True, list_id='dl-accounts') }}
       </label>
       <label class="wide">Steuercode
-        <select name="tax_id">
-          <option value="">–</option>
-          {% for t in md.get('taxes', []) if t.active %}<option value="{{ t.id }}" {{ 'selected' if t.id == dec.tax_id }}>{{ t.code }} {{ t.name }}</option>{% endfor %}
-        </select>
+        {{ tax_picker('tax_code', md.get('taxes', []), dec.tax_id, list_id='dl-taxes') }}
       </label>
       <label>Zahlung
         <select name="payment_mode">

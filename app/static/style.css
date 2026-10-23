@@ -21,3 +21,5 @@ dl.kv{display:grid;grid-template-columns:90px 1fr;gap:4px 10px;margin:8px 0 0}dl
 .ok{color:var(--ok)}.warn{color:var(--warn)}.error{color:var(--err)}
 form.upload{margin-left:auto}
 @media (max-width:980px){.split{grid-template-columns:1fr}.pane.pdf{position:static;height:60vh}.grid{grid-template-columns:1fr}}
+
+input.picker { width: 100%; }

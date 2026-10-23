@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Zahlkonten – finance{% endblock %}
+{% from "_pickers.html" import account_input, account_datalist %}
 {% block content %}
 <h2>Zahlkonten (Kreditkarten, Kontokorrent Kim, Bank)</h2>
 <table>
@@ -12,7 +13,7 @@
   <td><input name="label" value="{{ p.label }}"></td>
   <td><select name="kind">{% for v, l in [('card','Kreditkarte'),('private','privat (Kim)'),('bank','Bank')] %}<option value="{{ v }}" {{ 'selected' if p.kind == v }}>{{ l }}</option>{% endfor %}</select></td>
   <td><input name="card_last4" value="{{ p.card_last4 or '' }}" maxlength="4" size="4"></td>
-  <td><select name="bexio_account_id"><option value="">–</option>{% for a in (t.master_data or {}).get('accounts', []) %}<option value="{{ a.id }}" {{ 'selected' if a.id == p.bexio_account_id }}>{{ a.no }} {{ a.name }}</option>{% endfor %}</select></td>
+  <td>{{ account_input('bexio_account_no', (t.master_data or {}).get('accounts', []), p.bexio_account_id, 'dl-acc-' ~ t.code) }}</td>
   <td><select name="active"><option value="1" {{ 'selected' if p.active }}>ja</option><option value="0" {{ 'selected' if not p.active }}>nein</option></select></td>
   <td><button>Speichern</button></td>
 </form>
@@ -25,12 +26,13 @@
   <td><input name="label" placeholder="z.B. Visa Firma"></td>
   <td><select name="kind"><option value="card">Kreditkarte</option><option value="private">privat (Kim)</option><option value="bank">Bank</option></select></td>
   <td><input name="card_last4" maxlength="4" size="4"></td>
-  <td><select name="bexio_account_id"><option value="">–</option>{% for a in (t.master_data or {}).get('accounts', []) %}<option value="{{ a.id }}">{{ a.no }} {{ a.name }}</option>{% endfor %}</select></td>
+  <td>{{ account_input('bexio_account_no', (t.master_data or {}).get('accounts', []), none, 'dl-acc-' ~ t.code) }}</td>
   <td><input type="hidden" name="active" value="1"></td>
   <td><button>Anlegen</button></td>
 </form>
 </tr>
 {% endfor %}
 </tbody></table>
+{% for t in tenants %}{{ account_datalist('dl-acc-' ~ t.code, (t.master_data or {}).get('accounts', [])) }}{% endfor %}
 <p class="muted">Das bexio-Konto ist das Gegenkonto der Buchung (z.B. 1021 Kreditkarte, 2850 Kontokorrent Kim). Stammdaten zuerst unter Einstellungen laden.</p>
 {% endblock %}
