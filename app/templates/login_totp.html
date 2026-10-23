@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>finance – Code</title><link rel="stylesheet" href="/static/style.css"></head>
+<body class="login">
+<form method="post" action="/login/totp" class="card narrow">
+  <h1>finance</h1>
+  <p class="muted">Code aus der Authenticator-App</p>
+  {% if error %}<p class="error">{{ error }}</p>{% endif %}
+  <label>Code <input name="totp" inputmode="numeric" pattern="[0-9 ]*" autocomplete="one-time-code" required autofocus></label>
+  <button class="primary">Bestätigen</button>
+  <p class="muted"><a href="/login">Zurück</a></p>
+</form>
+</body></html>

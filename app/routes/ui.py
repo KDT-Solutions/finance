@@ -90,15 +90,45 @@ def login_form(request: Request):
     return templates.TemplateResponse(request, "login.html", {"request": request, "error": None, "settings": get_settings()})
 
 
-@router.post("/login")
-def login(request: Request, username: str = Form(""), password: str = Form(""), totp: str = Form("")):
-    ip = request.client.host if request.client else "?"
-    if not auth.check_login(username, password, totp, ip):
-        return templates.TemplateResponse(request, "login.html", {"request": request, "error": "Anmeldung fehlgeschlagen", "settings": get_settings()}, status_code=401)
+def _secure() -> bool:
+    return get_settings().public_base_url.startswith("https")
+
+
+def _finish_login() -> RedirectResponse:
     resp = RedirectResponse("/todo", status_code=303)
-    resp.set_cookie(auth.COOKIE, auth.create_session(), max_age=auth.SESSION_MAX_AGE, httponly=True, samesite="lax",
-                    secure=get_settings().public_base_url.startswith("https"))
+    resp.set_cookie(auth.COOKIE, auth.create_session(), max_age=auth.SESSION_MAX_AGE, httponly=True, samesite="lax", secure=_secure())
+    resp.delete_cookie(auth.PRE_COOKIE)
     return resp
+
+
+@router.post("/login")
+def login(request: Request, username: str = Form(""), password: str = Form("")):
+    ip = request.client.host if request.client else "?"
+    if not auth.check_password(username, password, ip):
+        return templates.TemplateResponse(request, "login.html", {"request": request, "error": "Anmeldung fehlgeschlagen", "settings": get_settings()}, status_code=401)
+    if not auth.totp_required():
+        return _finish_login()
+    # second step: one-time code
+    resp = RedirectResponse("/login/totp", status_code=303)
+    resp.set_cookie(auth.PRE_COOKIE, auth.create_pre_session(), max_age=auth.PRE_MAX_AGE, httponly=True, samesite="lax", secure=_secure())
+    return resp
+
+
+@router.get("/login/totp", response_class=HTMLResponse)
+def login_totp_form(request: Request):
+    if not auth.read_pre_session(request):
+        return RedirectResponse("/login", status_code=303)
+    return templates.TemplateResponse(request, "login_totp.html", {"request": request, "error": None})
+
+
+@router.post("/login/totp")
+def login_totp(request: Request, totp: str = Form("")):
+    ip = request.client.host if request.client else "?"
+    if not auth.read_pre_session(request):
+        return RedirectResponse("/login", status_code=303)
+    if not auth.check_totp(totp, ip):
+        return templates.TemplateResponse(request, "login_totp.html", {"request": request, "error": "Code ungültig"}, status_code=401)
+    return _finish_login()
 
 
 @router.post("/logout")

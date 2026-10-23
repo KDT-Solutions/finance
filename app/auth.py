@@ -15,7 +15,9 @@ from itsdangerous import BadSignature, URLSafeTimedSerializer
 from .config import get_settings
 
 COOKIE = "finance_session"
+PRE_COOKIE = "finance_pre"  # password verified, TOTP pending (second step)
 SESSION_MAX_AGE = 12 * 3600
+PRE_MAX_AGE = 300
 _failed: dict[str, list[float]] = {}
 _ph = PasswordHasher()
 
@@ -45,7 +47,15 @@ def _too_many(client_ip: str) -> bool:
     return len(attempts) >= 5
 
 
-def check_login(username: str, password: str, totp: str, client_ip: str) -> bool:
+def _record(client_ip: str, ok: bool) -> None:
+    if not ok:
+        _failed.setdefault(client_ip, []).append(time.time())
+    else:
+        _failed.pop(client_ip, None)
+
+
+def check_password(username: str, password: str, client_ip: str) -> bool:
+    """Step 1: user name and password."""
     if _too_many(client_ip):
         return False
     s = get_settings()
@@ -54,13 +64,43 @@ def check_login(username: str, password: str, totp: str, client_ip: str) -> bool
         ok = _ph.verify(s.admin_password_hash, password) and ok
     except (VerifyMismatchError, ValueError):
         ok = False
-    if ok and s.admin_totp_secret:
-        ok = pyotp.TOTP(s.admin_totp_secret).verify(totp.replace(" ", ""), valid_window=1)
-    if not ok:
-        _failed.setdefault(client_ip, []).append(time.time())
-    else:
-        _failed.pop(client_ip, None)
+    _record(client_ip, ok)
     return ok
+
+
+def check_totp(code: str, client_ip: str) -> bool:
+    """Step 2: one-time code (only when a TOTP secret is configured)."""
+    if _too_many(client_ip):
+        return False
+    s = get_settings()
+    ok = bool(s.admin_totp_secret) and pyotp.TOTP(s.admin_totp_secret).verify((code or "").replace(" ", ""), valid_window=1)
+    _record(client_ip, ok)
+    return ok
+
+
+def totp_required() -> bool:
+    return bool(get_settings().admin_totp_secret)
+
+
+def create_pre_session() -> str:
+    return URLSafeTimedSerializer(get_settings().secret_key, salt="pre").dumps({"u": get_settings().admin_user, "n": secrets.token_urlsafe(8)})
+
+
+def read_pre_session(request: Request) -> dict | None:
+    raw = request.cookies.get(PRE_COOKIE)
+    if not raw:
+        return None
+    try:
+        return URLSafeTimedSerializer(get_settings().secret_key, salt="pre").loads(raw, max_age=PRE_MAX_AGE)
+    except BadSignature:
+        return None
+
+
+def check_login(username: str, password: str, totp: str, client_ip: str) -> bool:
+    """Single-step check (used by tests / API clients): password and, if configured, TOTP together."""
+    if not check_password(username, password, client_ip):
+        return False
+    return check_totp(totp, client_ip) if totp_required() else True
 
 
 def require_login(request: Request) -> dict:
