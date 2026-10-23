@@ -68,8 +68,12 @@
       </div>
     </form>
     <div class="actions">
-      <form method="post" action="/docs/{{ doc.id }}/skip" class="inline"><input type="hidden" name="csrf" value="{{ sess.csrf }}"><input type="hidden" name="kind" value="skip"><button class="secondary">Überspringen</button></form>
-      <form method="post" action="/docs/{{ doc.id }}/skip" class="inline"><input type="hidden" name="csrf" value="{{ sess.csrf }}"><input type="hidden" name="kind" value="not_receipt"><input type="hidden" name="close_ticket" value="1"><button class="secondary">Kein Beleg, Ticket schliessen</button></form>
+      {% if doc.state in ('cancelled', 'skipped', 'not_a_receipt') %}
+      <form method="post" action="/docs/{{ doc.id }}/restore" class="inline" data-confirm="Beleg wieder aktivieren?"><input type="hidden" name="csrf" value="{{ sess.csrf }}"><button class="primary">Wiederherstellen</button></form>
+      {% else %}
+      <form method="post" action="/docs/{{ doc.id }}/skip" class="inline" data-confirm="Beleg überspringen? Er bleibt unter Todo > Übersprungen und kann wiederhergestellt werden."><input type="hidden" name="csrf" value="{{ sess.csrf }}"><input type="hidden" name="kind" value="skip"><button class="secondary">Überspringen</button></form>
+      <form method="post" action="/docs/{{ doc.id }}/skip" class="inline" data-confirm="Als 'kein Beleg' markieren und das Zammad-Ticket schliessen?"><input type="hidden" name="csrf" value="{{ sess.csrf }}"><input type="hidden" name="kind" value="not_receipt"><input type="hidden" name="close_ticket" value="1"><button class="secondary">Kein Beleg, Ticket schliessen</button></form>
+      {% endif %}
       <form method="post" action="/docs/{{ doc.id }}/reprocess" class="inline"><input type="hidden" name="csrf" value="{{ sess.csrf }}"><button class="secondary">Neu auslesen</button></form>
       {% if next_doc %}<a class="btn" href="/docs/{{ next_doc.id }}">Nächster Beleg</a>{% endif %}
     </div>

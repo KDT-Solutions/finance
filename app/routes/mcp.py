@@ -369,6 +369,18 @@ def t_skip(db, a):
     return {"ok": True, "state": d.state}
 
 
+@tool("restore_document", "Überspringen / 'kein Beleg' / Stornierung im Tool rückgängig machen (bexio wird nicht angefasst).",
+      {"id": {"type": "integer"}, "confirm": CONFIRM}, ["id"])
+def t_restore(db, a):
+    d = db.get(Document, int(a["id"]))
+    if not d:
+        raise ToolError("Beleg nicht gefunden")
+    if not a.get("confirm"):
+        return _preview(f"Beleg {d.id} ({d.state}) wiederherstellen", {})
+    state = actions.restore_document(db, d, actor=ACTOR)
+    return {"ok": True, "state": state}
+
+
 @tool("reprocess_document", "Beleg neu auslesen und neu entscheiden (QR, LLM, Regeln).", {"id": {"type": "integer"}, "confirm": CONFIRM}, ["id"])
 def t_reprocess(db, a):
     d = db.get(Document, int(a["id"]))
@@ -619,7 +631,8 @@ def t_bexio_bill(db, a):
 
 @tool("fix_open_bill", "Offene bexio-Rechnung eines Belegs korrigieren und verbuchen: Steuercode und/oder Konto auf den Positionen setzen, danach Status BOOKED. "
       "Für Belege, deren Rechnung in bexio noch als Entwurf (DRAFT) steht, z.B. nach PURCHASES.VALIDATION.TAX_INCORRECT.",
-      {"id": {"type": "integer", "description": "Beleg-ID"}, "tax_code": {"type": "string"}, "account_no": {"type": "string"}, "confirm": CONFIRM}, ["id"])
+      {"id": {"type": "integer", "description": "Beleg-ID"}, "tax_code": {"type": "string"}, "account_no": {"type": "string"},
+       "exchange_rate": {"type": "number", "description": "Kurs CHF je Einheit Fremdwährung; base_currency_amount wird neu gerechnet"}, "confirm": CONFIRM}, ["id"])
 def t_fix_open_bill(db, a):
     d = db.get(Document, int(a["id"]))
     if not d or not d.booking or d.booking.kind != "bill_open" or not d.booking.bexio_bill_id:
@@ -627,18 +640,22 @@ def t_fix_open_bill(db, a):
     t = d.tenant
     tx = _tax(t, a.get("tax_code")) if a.get("tax_code") else None
     acc = _account(t, a.get("account_no")) if a.get("account_no") else None
+    rate = float(a["exchange_rate"]) if a.get("exchange_rate") else None
     if not a.get("confirm"):
-        return _preview(f"Rechnung {d.booking.bexio_bill_id} anpassen und buchen", {"tax_code": tx["code"] if tx else None, "account_no": acc["no"] if acc else None})
+        return _preview(f"Rechnung {d.booking.bexio_bill_id} anpassen und buchen", {"tax_code": tx["code"] if tx else None, "account_no": acc["no"] if acc else None, "exchange_rate": rate})
     c = bx.BexioClient(db, t)
     try:
         bill = c.get_bill(d.booking.bexio_bill_id)
-        if tx or acc:
+        if tx or acc or rate:
             body = c.bill_update_payload(bill)
             for li in body["line_items"]:
                 if tx:
                     li["tax_id"] = tx["id"]
                 if acc:
                     li["booking_account_id"] = acc["id"]
+            if rate:
+                body["exchange_rate"] = round(rate, 10)
+                body["base_currency_amount"] = round(float(bill.get("amount_calc") or bill.get("amount_man") or 0) * rate, 2)
             bill = c.update_bill(d.booking.bexio_bill_id, body)
         if str(bill.get("status", "")).upper() == "DRAFT":
             c.set_bill_status(d.booking.bexio_bill_id, "BOOKED")
@@ -652,6 +669,8 @@ def t_fix_open_bill(db, a):
         dec["tax_id"] = tx["id"]
     if acc:
         dec["account_id"] = acc["id"]
+    if rate:
+        dec["exchange_rate"] = rate
     d.decision = dec
     audit.log(db, "booking.fixed", tenant_id=t.id, actor=ACTOR, entity="booking", entity_id=d.booking.id, details={"tax_code": tx["code"] if tx else None, "account_no": acc["no"] if acc else None, "status": bill.get("status")})
     db.commit()

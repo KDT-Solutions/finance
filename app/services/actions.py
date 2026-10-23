@@ -74,3 +74,19 @@ def skip_document(db: Session, z: ZammadClient | None, doc: Document, kind: str,
             z.set_state(doc.zammad_ticket_id, "closed")
         except Exception:  # noqa: BLE001
             log.exception("close failed")
+
+
+def restore_document(db: Session, doc: Document, *, actor: str) -> str:
+    """Undo skip / not_a_receipt / cancel in the tool. A cancelled booking becomes ok again (bexio was never touched),
+    otherwise the document goes back to the review queue."""
+    if doc.booking and doc.booking.status == "cancelled":
+        doc.booking.status = "ok"
+        doc.state = "booked"
+    elif doc.booking and doc.booking.status == "ok":
+        doc.state = "booked"
+    else:
+        doc.state = "needs_review"
+        doc.review_reason = (doc.review_reason or "") or "wiederhergestellt"
+    audit.log(db, "document.restored", tenant_id=doc.tenant_id, actor=actor, entity="document", entity_id=doc.id, details={"state": doc.state})
+    db.commit()
+    return doc.state

@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from ..config import get_settings
 from ..models import KV, Booking, Document, Extraction, PaymentAccount, Rule, Supplier, Tenant, now
-from . import audit, bexio as bx, extract, qr as qrmod, rules
+from . import audit, bexio as bx, extract, fx, qr as qrmod, rules
 from .zammad import ZammadClient
 
 log = logging.getLogger(__name__)
@@ -268,7 +268,7 @@ def book(db: Session, z: ZammadClient | None, doc: Document, *, actor: str = "sy
                 booking.kind, booking.bexio_bill_id, booking.response, booking.bexio_status = "bill_open", str(existing.get("id")), existing, existing.get("status")
             else:
                 currency = (dec.get("currency") or "CHF").upper()
-                rate = dec.get("exchange_rate") or (client.exchange_rate(currency, dec.get("doc_date") or "") if currency != "CHF" else 1.0)
+                rate = dec.get("exchange_rate") or (1.0 if currency == "CHF" else (fx.bazg_rate(currency, dec.get("doc_date") or "") or client.exchange_rate(currency, dec.get("doc_date") or "")))
                 if currency != "CHF" and not rate:
                     raise RuntimeError(f"Kein Wechselkurs für {currency} in bexio (Währung in bexio anlegen oder Kurs im Beleg setzen)")
                 f = client.upload_file(doc.filename or "beleg.pdf", pdf)

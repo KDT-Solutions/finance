@@ -243,6 +243,15 @@ async def doc_skip(request: Request, doc_id: int, db: Session = Depends(get_db),
     return RedirectResponse(f"/todo?tenant={doc.tenant.code}", status_code=303)
 
 
+@router.post("/docs/{doc_id}/restore")
+def doc_restore(doc_id: int, db: Session = Depends(get_db), sess: dict = Depends(auth.require_csrf)):
+    doc = db.get(Document, doc_id)
+    if not doc:
+        raise HTTPException(404)
+    actions.restore_document(db, doc, actor=sess["u"])
+    return RedirectResponse(f"/docs/{doc.id}", status_code=303)
+
+
 @router.post("/docs/{doc_id}/reprocess")
 def doc_reprocess(doc_id: int, db: Session = Depends(get_db), sess: dict = Depends(auth.require_csrf)):
     doc = db.get(Document, doc_id)
@@ -295,6 +304,15 @@ def booking_cancel(booking_id: int, db: Session = Depends(get_db), sess: dict = 
     b.document.state = "cancelled"
     audit.log(db, "booking.cancelled", tenant_id=b.tenant_id, actor=sess["u"], entity="booking", entity_id=b.id)
     db.commit()
+    return RedirectResponse("/bookings", status_code=303)
+
+
+@router.post("/bookings/{booking_id}/restore")
+def booking_restore(booking_id: int, db: Session = Depends(get_db), sess: dict = Depends(auth.require_csrf)):
+    b = db.get(Booking, booking_id)
+    if not b:
+        raise HTTPException(404)
+    actions.restore_document(db, b.document, actor=sess["u"])
     return RedirectResponse("/bookings", status_code=303)
 
 
