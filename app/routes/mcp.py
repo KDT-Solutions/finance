@@ -169,7 +169,7 @@ def t_tenants(db, a):
     for t in db.query(Tenant).order_by(Tenant.id).all():
         n = db.query(Document).filter(Document.tenant_id == t.id, Document.state.in_(["needs_review", "error"])).count()
         out.append({"code": t.code, "name": t.name, "active": t.active, "bexio_connected": t.bexio_connected,
-                    "bexio_company": t.bexio_company_name, "master_data_at": t.master_data_at.isoformat() if t.master_data_at else None,
+                    "bexio_company": t.bexio_company_name, "bexio_company_id": t.bexio_company_id, "master_data_at": t.master_data_at.isoformat() if t.master_data_at else None,
                     "open_todo": n})
     return out
 

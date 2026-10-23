@@ -62,6 +62,16 @@ python -m app.tools totp-secret          # ADMIN_TOTP_SECRET (optional)
 4. Todo: review the first documents, confirm with "remember rule"; known suppliers are
    then booked without a click.
 
+## bexio company check
+
+Each tenant only accepts its own bexio company. After the OAuth login the server asks bexio
+`/userinfo` (scope `company_profile`) which company was signed in. Without a stored company the
+company name must equal the tenant name (case and spacing ignored); the `company_id` is then stored
+and is the only thing that counts afterwards. A login with another company is rejected and the
+existing connection stays. The id is checked again on every token refresh; on a mismatch the
+tenant is disconnected. Connections made before this check (without `company_profile`) are
+blocked until the tenant is reconnected once. Disconnecting keeps the stored id.
+
 ## bexio API notes
 
 Purchase bills use API 4.0 (`POST /4.0/purchase/bills`, `PUT /4.0/purchase/bills/{id}/bookings/{status}`).

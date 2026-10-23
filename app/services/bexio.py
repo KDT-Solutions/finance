@@ -72,6 +72,41 @@ def _refresh(refresh_token: str) -> dict:
     return r.json()
 
 
+def fetch_company(access_token: str) -> tuple[str, str]:
+    """(company_id, company_name) des Logins laut bexio /userinfo (Scope company_profile)."""
+    r = httpx.get(get_settings().bexio_userinfo_url, headers={"Authorization": f"Bearer {access_token}"}, timeout=30)
+    if r.status_code >= 400:
+        raise BexioError(r.status_code, r.text, "userinfo")
+    data = r.json()
+    cid = str(data.get("company_id") or "").strip()
+    if not cid:
+        raise BexioError(403, "bexio liefert keine company_id (Scope company_profile fehlt) - bexio neu verbinden", "userinfo")
+    return cid, str(data.get("company_name") or "")
+
+
+def _norm(name) -> str:
+    return " ".join(str(name or "").split()).casefold()
+
+
+def company_problem(tenant: Tenant, company: tuple[str, str]) -> str | None:
+    """None, wenn die bexio-Firma zum Mandanten passt, sonst die Begruendung.
+    Massgebend ist die gespeicherte company_id; ohne sie muss der Firmenname dem Mandantennamen entsprechen."""
+    cid, cname = company
+    label = f"{cname or 'unbekannt'} (ID {cid})"
+    if tenant.bexio_company_id:
+        if tenant.bexio_company_id != cid:
+            return f"{tenant.code} ist mit bexio-Firma ID {tenant.bexio_company_id} verknüpft, angemeldet ist {label}."
+        return None
+    if _norm(cname) != _norm(tenant.name):
+        return f"{tenant.code} erwartet die Firma '{tenant.name}', angemeldet ist {label}."
+    return None
+
+
+class CompanyMismatch(BexioError):
+    def __init__(self, msg: str):
+        super().__init__(403, msg, "company")
+
+
 def store_tokens(db: Session, tenant: Tenant, tokens: dict) -> None:
     tenant.bexio_access_token = crypto.encrypt(tokens.get("access_token"))
     if tokens.get("refresh_token"):
@@ -109,6 +144,19 @@ class BexioClient:
             if tok:
                 return tok
         tokens = _refresh(crypto.decrypt(t.bexio_refresh_token) or "")
+        # bexio rotiert den Refresh Token: erst speichern, dann die Firma pruefen
+        store_tokens(self.db, t, tokens)
+        t.bexio_access_token = None  # erst nach bestandener Pruefung verwendbar
+        self.db.commit()
+        company = fetch_company(tokens["access_token"])
+        problem = company_problem(t, company)
+        if problem:
+            disconnect(self.db, t)
+            self.db.commit()
+            log.error("bexio %s gesperrt: %s", t.code, problem)
+            raise CompanyMismatch(f"{problem} Verbindung getrennt, bitte neu verbinden.")
+        if not t.bexio_company_id:
+            t.bexio_company_id = company[0]
         store_tokens(self.db, t, tokens)
         self.db.commit()
         return tokens["access_token"]

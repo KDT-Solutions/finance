@@ -613,7 +613,15 @@ def bexio_callback(request: Request, code: str = "", state: str = "", error: str
     db.delete(kv)
     try:
         tokens = bx.exchange_code(code)
+        company = bx.fetch_company(tokens["access_token"])
+        problem = bx.company_problem(t, company)
+        if problem:
+            audit.log(db, "bexio.rejected", tenant_id=t.id, actor=sess["u"],
+                      details={"company_id": company[0], "company": company[1]})
+            db.commit()
+            return RedirectResponse(f"/settings?msg={t.code}: {problem} Nichts gespeichert, bisherige Verbindung unverändert.", status_code=303)
         bx.store_tokens(db, t, tokens)
+        t.bexio_company_id = t.bexio_company_id or company[0]
         t.bexio_connected_at = now()
         db.commit()
         client = bx.BexioClient(db, t)
