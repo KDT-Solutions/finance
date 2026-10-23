@@ -10,13 +10,14 @@ import hmac
 import json
 import logging
 import secrets
+import time
 from typing import Any, Callable
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response
 from sqlalchemy.orm import Session
 
-from .. import __version__
+from .. import __version__, auth
 from ..config import get_settings
 from ..db import SessionLocal
 from ..models import AuditLog, Booking, Document, PaymentAccount, Rule, Supplier, Tenant
@@ -743,9 +744,18 @@ def _authorized(request: Request) -> bool:
     if not token:
         return False
     auth_header = request.headers.get("authorization", "")
-    if not auth_header.lower().startswith("bearer "):
-        return False
-    return hmac.compare_digest(auth_header[7:].strip(), token)
+    ok = auth_header.lower().startswith("bearer ") and hmac.compare_digest(auth_header[7:].strip(), token)
+    if not ok:
+        auth.mcp_failed()
+    return ok
+
+
+def _unauthorized(request: Request) -> JSONResponse:
+    """401 normally; 429 (and a short delay) once too many wrong tokens were seen. Valid tokens are never throttled."""
+    if auth.mcp_blocked():
+        time.sleep(1)
+        return JSONResponse({"error": "too_many_requests"}, status_code=429, headers={"Retry-After": str(auth.MCP_FAIL_WINDOW)})
+    return JSONResponse({"error": "unauthorized"}, status_code=401, headers={"WWW-Authenticate": "Bearer"})
 
 
 def _rpc_error(id_, code: int, message: str, status: int = 200) -> JSONResponse:
@@ -796,7 +806,7 @@ def _handle(msg: dict) -> dict | None:
 @router.post("/mcp")
 async def mcp_post(request: Request):
     if not _authorized(request):
-        return JSONResponse({"error": "unauthorized"}, status_code=401, headers={"WWW-Authenticate": "Bearer"})
+        return _unauthorized(request)
     try:
         body = await request.json()
     except Exception:  # noqa: BLE001
@@ -819,10 +829,12 @@ async def mcp_post(request: Request):
 @router.get("/mcp")
 async def mcp_get(request: Request):
     if not _authorized(request):
-        return JSONResponse({"error": "unauthorized"}, status_code=401, headers={"WWW-Authenticate": "Bearer"})
+        return _unauthorized(request)
     return Response(status_code=405)
 
 
 @router.delete("/mcp")
 async def mcp_delete(request: Request):
-    return Response(status_code=405 if _authorized(request) else 401)
+    if not _authorized(request):
+        return _unauthorized(request)
+    return Response(status_code=405)

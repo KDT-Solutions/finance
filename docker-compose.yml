@@ -64,6 +64,7 @@ services:
       - DATA_DIR=/data
       - TZ=${TZ:-Europe/Zurich}
       - WORKER_INTERVAL_SECONDS=${WORKER_INTERVAL_SECONDS:-300}
+      - FORWARDED_ALLOW_IPS=${FORWARDED_ALLOW_IPS:-127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
     volumes:
       - finance-data:/data
 

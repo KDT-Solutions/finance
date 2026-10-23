@@ -94,6 +94,12 @@ def _secure() -> bool:
     return get_settings().public_base_url.startswith("https")
 
 
+def _lock_message(seconds: int) -> str:
+    if seconds <= 0:
+        return "Zu viele Fehlversuche. Bitte später erneut versuchen."
+    return f"Zu viele Fehlversuche. Anmeldung für {seconds} Sekunden gesperrt."
+
+
 def _finish_login() -> RedirectResponse:
     resp = RedirectResponse("/todo", status_code=303)
     resp.set_cookie(auth.COOKIE, auth.create_session(), max_age=auth.SESSION_MAX_AGE, httponly=True, samesite="lax", secure=_secure())
@@ -104,8 +110,11 @@ def _finish_login() -> RedirectResponse:
 @router.post("/login")
 def login(request: Request, username: str = Form(""), password: str = Form("")):
     ip = request.client.host if request.client else "?"
+    if auth.blocked(ip):
+        return templates.TemplateResponse(request, "login.html", {"request": request, "error": _lock_message(auth.locked_for()), "settings": get_settings()}, status_code=429, headers={"Retry-After": str(max(1, auth.locked_for()))})
     if not auth.check_password(username, password, ip):
-        return templates.TemplateResponse(request, "login.html", {"request": request, "error": "Anmeldung fehlgeschlagen", "settings": get_settings()}, status_code=401)
+        wait = auth.locked_for()
+        return templates.TemplateResponse(request, "login.html", {"request": request, "error": _lock_message(wait) if wait else "Anmeldung fehlgeschlagen", "settings": get_settings()}, status_code=429 if wait else 401)
     if not auth.totp_required():
         return _finish_login()
     # second step: one-time code
@@ -126,8 +135,11 @@ def login_totp(request: Request, totp: str = Form("")):
     ip = request.client.host if request.client else "?"
     if not auth.read_pre_session(request):
         return RedirectResponse("/login", status_code=303)
+    if auth.blocked(ip):
+        return templates.TemplateResponse(request, "login_totp.html", {"request": request, "error": _lock_message(auth.locked_for())}, status_code=429, headers={"Retry-After": str(max(1, auth.locked_for()))})
     if not auth.check_totp(totp, ip):
-        return templates.TemplateResponse(request, "login_totp.html", {"request": request, "error": "Code ungültig"}, status_code=401)
+        wait = auth.locked_for()
+        return templates.TemplateResponse(request, "login_totp.html", {"request": request, "error": _lock_message(wait) if wait else "Code ungültig"}, status_code=429 if wait else 401)
     return _finish_login()
 
 
