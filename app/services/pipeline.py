@@ -370,10 +370,13 @@ def check_paid(db: Session, z: ZammadClient, tenant: Tenant) -> int:
 
 
 # --- history import ---------------------------------------------------------------------------
-def learn_from_history(db: Session, tenant: Tenant, months: int = 24) -> int:
-    """Seed supplier rules from existing purchase bills in bexio (account, tax, amount band)."""
+def learn_from_history(db: Session, tenant: Tenant, months: int = 24) -> dict:
+    """Seed supplier rules from paid purchase bills in bexio: expense account (majority), amount band, and the
+    payment source (bank account of the outgoing payment -> payment account -> card/private/bank_paid, else open).
+    Returns counts plus the bexio bank accounts that paid bills but are not mapped to a payment account."""
     client = bx.BexioClient(db, tenant)
-    created = 0
+    created = updated = 0
+    unmapped: dict[str, int] = {}
     try:
         # The list response carries no supplier_id (spec: id, document_no, status, vendor, lastname_company, gross,
         # booking_account_ids ...), so bills are grouped by vendor name and the supplier contact id is read once per
@@ -382,7 +385,10 @@ def learn_from_history(db: Session, tenant: Tenant, months: int = 24) -> int:
         page = 1
         while True:
             # status filter values per spec: DRAFTS | TODO | PAID | OVERDUE; paging is 1-based "page"
-            res = client.list_bills(limit=500, page=page, status="PAID")
+            try:
+                res = client.list_bills(limit=500, page=page, status="PAID", sort="bill_date", order="desc")
+            except bx.BexioError:
+                res = client.list_bills(limit=500, page=page, status="PAID")
             rows = res.get("data", []) if isinstance(res, dict) else res
             if not rows:
                 break
@@ -390,7 +396,9 @@ def learn_from_history(db: Session, tenant: Tenant, months: int = 24) -> int:
                 name = (b.get("vendor") or b.get("lastname_company") or "").strip()
                 if not name:
                     continue
-                st = by_vendor.setdefault(rules.normalize_name(name), {"name": name, "accounts": {}, "amounts": [], "bill_id": b.get("id"), "sid": b.get("supplier_id")})
+                st = by_vendor.setdefault(rules.normalize_name(name), {"name": name, "accounts": {}, "amounts": [], "bill_ids": [], "sid": b.get("supplier_id")})
+                if len(st["bill_ids"]) < 3 and b.get("id"):
+                    st["bill_ids"].append(str(b["id"]))
                 for acc in b.get("booking_account_ids") or []:
                     st["accounts"][acc] = st["accounts"].get(acc, 0) + 1
                 if b.get("gross"):
@@ -402,20 +410,46 @@ def learn_from_history(db: Session, tenant: Tenant, months: int = 24) -> int:
                 break
             page += 1
         log.info("history %s: %d paid bills grouped into %d vendors", tenant.code, sum(len(v["amounts"]) for v in by_vendor.values()), len(by_vendor))
-        stats: dict[int, dict] = {}
+
+        bank_by_id = {b["id"]: b for b in (tenant.master_data or {}).get("bank_accounts", [])}
+        pay_accounts = db.query(PaymentAccount).filter(PaymentAccount.tenant_id == tenant.id, PaymentAccount.active.is_(True)).all()
+        pa_by_ledger = {pa.bexio_account_id: pa for pa in pay_accounts if pa.bexio_account_id}
+        mode_for_kind = {"card": "card", "private": "private", "bank": "bank_paid"}
+
         for key, st in by_vendor.items():
             sid = st.get("sid")
-            if not sid and st.get("bill_id"):
+            if not sid and st["bill_ids"]:
                 try:
-                    sid = client.get_bill(str(st["bill_id"])).get("supplier_id")
+                    sid = client.get_bill(st["bill_ids"][0]).get("supplier_id")
                 except bx.BexioError as e:
-                    log.warning("history: bill %s detail failed: %s", st["bill_id"], e)
-            if not sid:
+                    log.warning("history: bill %s detail failed: %s", st["bill_ids"][0], e)
+            if not sid or not st["accounts"] or not st["name"]:
                 continue
-            stats[int(sid)] = st
-        for sid, st in stats.items():
-            if not st["accounts"] or not st["name"]:
-                continue
+            # payment source: outgoing payments of the sampled bills
+            sources: dict[int, int] = {}
+            ibans: set[str] = set()
+            for bid in st["bill_ids"]:
+                try:
+                    pays = client.get("/4.0/purchase/outgoing-payments", bill_id=bid, limit=10) or {}
+                except bx.BexioError as e:
+                    log.warning("history: payments of bill %s failed: %s", bid, e)
+                    continue
+                for p in pays.get("data", []) if isinstance(pays, dict) else pays:
+                    if p.get("sender_bank_account_id"):
+                        sources[p["sender_bank_account_id"]] = sources.get(p["sender_bank_account_id"], 0) + 1
+                    if p.get("receiver_iban"):
+                        ibans.add(rules.normalize_iban(p["receiver_iban"]))
+            payment_mode, payment_account_id = "open", None
+            if sources:
+                bank_id, _n = max(sources.items(), key=lambda kv: kv[1])
+                bank = bank_by_id.get(bank_id, {})
+                pa = pa_by_ledger.get(bank.get("account_id"))
+                if pa:
+                    payment_mode, payment_account_id = mode_for_kind.get(pa.kind, "bank_paid"), pa.id
+                else:
+                    label = bank.get("name") or f"bank_account {bank_id}"
+                    unmapped[label] = unmapped.get(label, 0) + 1
+
             acc, n = max(st["accounts"].items(), key=lambda kv: kv[1])
             sup = db.query(Supplier).filter(Supplier.tenant_id == tenant.id, Supplier.bexio_contact_id == sid).first()
             if not sup:
@@ -426,16 +460,23 @@ def learn_from_history(db: Session, tenant: Tenant, months: int = 24) -> int:
                 db.flush()
             else:
                 sup.bexio_contact_id = sup.bexio_contact_id or sid
-            if not any(not (r.keywords or []) for r in sup.rules):
-                rule = Rule(tenant_id=tenant.id, supplier_id=sup.id, keywords=[], account_id=acc, tax_id=tenant.default_tax_id,
-                            payment_mode="open", auto_book=n >= 2 and len(st["accounts"]) == 1, learned_from="history", hits=n,
-                            amount_min=min(st["amounts"]) * 0.5 if st["amounts"] else None, amount_max=max(st["amounts"]) * 2 if st["amounts"] else None)
-                db.add(rule)
+            if ibans:
+                sup.ibans = sorted(set(sup.ibans or []) | {i for i in ibans if i})
+            default_rule = next((r for r in sup.rules if not (r.keywords or [])), None)
+            if default_rule is None:
+                db.add(Rule(tenant_id=tenant.id, supplier_id=sup.id, keywords=[], account_id=acc, tax_id=None,
+                            payment_mode=payment_mode, payment_account_id=payment_account_id,
+                            auto_book=n >= 2 and len(st["accounts"]) == 1, learned_from="history", hits=n,
+                            amount_min=min(st["amounts"]) * 0.5 if st["amounts"] else None, amount_max=max(st["amounts"]) * 2 if st["amounts"] else None))
                 created += 1
+            elif default_rule.learned_from == "history" and (default_rule.payment_mode, default_rule.payment_account_id) != (payment_mode, payment_account_id):
+                # rules confirmed or edited by a person are left alone; history rules follow the latest import
+                default_rule.payment_mode, default_rule.payment_account_id = payment_mode, payment_account_id
+                updated += 1
         db.commit()
     finally:
         client.close()
-    return created
+    return {"created": created, "updated": updated, "unmapped_bank_accounts": unmapped}
 
 
 def summary_text(db: Session) -> str:

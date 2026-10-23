@@ -445,10 +445,12 @@ def tenant_refresh(code: str, db: Session = Depends(get_db), sess: dict = Depend
 def tenant_learn(code: str, db: Session = Depends(get_db), sess: dict = Depends(auth.require_csrf)):
     t = _tenant_or_404(db, code)
     try:
-        n = pipeline.learn_from_history(db, t)
-        audit.log(db, "rules.learned_from_history", tenant_id=t.id, actor=sess["u"], details={"rules": n})
+        res = pipeline.learn_from_history(db, t)
+        audit.log(db, "rules.learned_from_history", tenant_id=t.id, actor=sess["u"], details=res)
         db.commit()
-        msg = f"{code}: {n} Regeln aus der bexio-Historie angelegt"
+        msg = f"{code}: {res['created']} Regeln angelegt, {res['updated']} Zahlungsart aktualisiert"
+        if res["unmapped_bank_accounts"]:
+            msg += "; bexio-Bankkonten ohne Zahlkonto: " + ", ".join(f"{k} ({v})" for k, v in res["unmapped_bank_accounts"].items())
     except bx.BexioError as e:
         msg = f"{code}: {e}"
     return RedirectResponse(f"/settings?msg={msg}", status_code=303)

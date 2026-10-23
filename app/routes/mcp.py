@@ -245,17 +245,18 @@ def t_refresh(db, a):
     return {"ok": True, "accounts": len(md.get("accounts", [])), "taxes": len(md.get("taxes", [])), "bank_accounts": md.get("bank_accounts", [])}
 
 
-@tool("learn_from_history", "Regeln aus bezahlten Kreditorenrechnungen in bexio ableiten (Konto je Lieferant, Betragsband).", {"tenant": TENANT, "confirm": CONFIRM}, ["tenant"])
+@tool("learn_from_history", "Regeln aus bezahlten Kreditorenrechnungen in bexio ableiten: Konto je Lieferant, Betragsband, Zahlungsquelle (Bankkonto der Zahlung -> Zahlkonto), Lieferanten-IBAN.", {"tenant": TENANT, "confirm": CONFIRM}, ["tenant"])
 def t_learn(db, a):
     t = _tenant(db, a["tenant"])
     if not t.bexio_connected:
         raise ToolError(f"{t.code}: bexio nicht verbunden")
     if not a.get("confirm"):
         return _preview(f"Regeln für {t.code} aus der bexio-Historie lernen", {})
-    n = pipeline.learn_from_history(db, t)
-    audit.log(db, "rules.learned_history", tenant_id=t.id, actor=ACTOR, details={"created": n})
+    res = pipeline.learn_from_history(db, t)
+    audit.log(db, "rules.learned_history", tenant_id=t.id, actor=ACTOR, details=res)
     db.commit()
-    return {"ok": True, "rules_created": n}
+    return {"ok": True, **res, "hinweis": "unmapped_bank_accounts: bexio-Bankkonten, aus denen Rechnungen bezahlt wurden, ohne Zahlkonto im Tool; "
+                                        "mit set_payment_account (bexio_account_no des Kontos) anlegen und erneut lernen, dann bekommen diese Lieferanten card/private/bank_paid"}
 
 
 @tool("list_accounts", "Kontenplan eines Mandanten (aus den Stammdaten), optional gefiltert nach Nummer oder Name.", {"tenant": TENANT, "q": {"type": "string"}}, ["tenant"])
