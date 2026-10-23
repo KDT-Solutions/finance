@@ -21,7 +21,8 @@ def db():
                    master_data={"accounts": [{"id": 40, "no": "6200", "name": "Reparaturen"}, {"id": 90, "no": "4400", "name": "Einkauf DL"}],
                                 "taxes": [{"id": 3, "code": "VB81", "rate": 8.1, "type": "pre_tax_investment", "active": True},
                                           {"id": 5, "code": "VM81", "rate": 8.1, "type": "pre_tax_material", "active": True},
-                                          {"id": 6, "code": "VM26", "rate": 2.6, "type": "pre_tax_material", "active": True}]})
+                                          {"id": 6, "code": "VM26", "rate": 2.6, "type": "pre_tax_material", "active": True},
+                                          {"id": 7, "code": "VIM", "rate": None, "type": "pre_tax_material", "active": True}]})
         s.add(t)
         s.flush()
         sup = Supplier(tenant_id=t.id, display_name="Hornbach Baumarkt AG", name_key=rules.normalize_name("Hornbach Baumarkt AG"), ibans=["CH11"], uid="CHE-111.222.333", name_variants=[])
@@ -112,9 +113,12 @@ def test_tax_from_document_not_rule(db):
     # 2.6% on the document although the rule says VB81: code follows the document, flagged for review
     d = rules.decide(db, t, group="Finance KDT", qr=None, llm={**base, "total_net": 100.0, "vat_lines": [{"rate": 2.6, "amount": 2.6, "base": 100.0}]}, text="", supplier=sup, rule=rule)
     assert d.tax_id == 6 and any("2.6%" in r for r in d.reasons) and d.auto is False
-    # foreign supplier: no code, review
+    # foreign supplier without CH VAT number: VIM, no tax reason
     d = rules.decide(db, t, group="Finance KDT", qr=None, llm={**base, "supplier_country": "DE", "total_net": 102.6, "vat_lines": []}, text="", supplier=sup, rule=None)
-    assert d.tax_id is None and any("Ausländischer" in r for r in d.reasons)
+    assert d.tax_id == 7 and not any("Steuercode" in r for r in d.reasons)
+    # foreign supplier with CHE number and 8.1% on the document: domestic logic
+    d = rules.decide(db, t, group="Finance KDT", qr=None, llm={**base, "supplier_country": "LU", "supplier_uid": "CHE-123.456.789", "total_net": 100.0, "vat_lines": [{"rate": 8.1, "amount": 8.1, "base": 100.0}]}, text="", supplier=sup, rule=None)
+    assert d.tax_id == 5
     # CH supplier without VAT: no code, review
     d = rules.decide(db, t, group="Finance KDT", qr=None, llm={**base, "supplier_country": "CH", "total_net": 102.6, "vat_lines": []}, text="", supplier=sup, rule=rule)
     assert d.tax_id is None and any("Keine MWST" in r for r in d.reasons)

@@ -258,10 +258,21 @@ def decide(db: Session, tenant: Tenant, *, group: str, qr: dict | None, llm: dic
     foreign = is_foreign(qr, llm)
     doc_rate = document_vat_rate(llm)
     if foreign:
-        # import / reverse charge: the code depends on customs paperwork, a confirmed rule may carry it
-        if not (rule and rule.tax_id):
-            d.tax_id = None
-            reasons.append("Ausländischer Lieferant: Steuercode prüfen (Import/Bezugsteuer)")
+        # foreign supplier without a Swiss VAT number: import code VIM (Kim 23.10.2026); with a CHE number
+        # the supplier charges Swiss VAT and the document decides like a domestic one
+        uid = normalize_uid(llm.get("supplier_uid") or "") or ""
+        if rule and rule.tax_id:
+            pass
+        elif uid.startswith("CHE") and doc_rate:
+            tax = pick_tax(tenant, d.account_id, doc_rate)
+            d.tax_id = tax["id"] if tax else None
+            if not tax:
+                reasons.append(f"Kein Steuercode für {doc_rate}% in den Stammdaten")
+        else:
+            vim = next((t for t in (tenant.master_data or {}).get("taxes", []) if t.get("code") == "VIM" and t.get("active", True)), None)
+            d.tax_id = vim["id"] if vim else None
+            if not vim:
+                reasons.append("Ausländischer Lieferant: Steuercode VIM fehlt in den Stammdaten")
     elif doc_rate:
         tax = pick_tax(tenant, d.account_id, doc_rate)
         if tax:

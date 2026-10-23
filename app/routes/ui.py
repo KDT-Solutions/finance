@@ -171,6 +171,7 @@ def _apply_form(db: Session, doc: Document, form) -> dict:
     dec["doc_date"] = (form.get("doc_date") or "").strip()
     dec["due_date"] = (form.get("due_date") or "").strip()
     dec["document_number"] = (form.get("document_number") or "").strip()[:80]
+    dec["already_paid"] = form.get("already_paid") == "1"
     # supplier rename / merge
     if dec["supplier_name"] and (not doc.supplier or rules.normalize_name(dec["supplier_name"]) != doc.supplier.name_key):
         existing = db.query(Supplier).filter(Supplier.tenant_id == doc.tenant_id, Supplier.name_key == rules.normalize_name(dec["supplier_name"])).first()

@@ -290,7 +290,18 @@ def book(db: Session, z: ZammadClient | None, doc: Document, *, actor: str = "sy
                     status = "DRAFT"
                 booking.kind, booking.bexio_bill_id, booking.bexio_file_id, booking.payload, booking.response, booking.bexio_status = "bill_open", bill_id, file_id, payload, created, status
             note = f"finance: Kreditorenrechnung in bexio angelegt (offen).\nLieferant: {dec.get('supplier_name')}\nBetrag: {booking.currency} {amount:.2f}\nKonto: {_master(tenant, 'accounts', dec.get('account_id')).get('no', dec.get('account_id'))}, Steuercode: {_master(tenant, 'taxes', dec.get('tax_id')).get('code', dec.get('tax_id') or '-')}\nbexio Bill-ID: {booking.bexio_bill_id}"
-            close_ticket = False
+            # already paid (checkbox / MCP flag, or an agent wrote "bezahlt" into the ticket): close now,
+            # the bank sync settles the bill in bexio
+            already_paid = bool(dec.get("already_paid"))
+            if not already_paid and z and doc.zammad_ticket_id:
+                try:
+                    already_paid = z.agent_marked_paid(doc.zammad_ticket_id)
+                except Exception:  # noqa: BLE001
+                    log.exception("paid marker check failed")
+            close_ticket = already_paid
+            if already_paid:
+                note += "\nBereits bezahlt, Ausgleich über den Banksync. Ticket geschlossen."
+                booking.paid_at = now()
         else:
             pa = db.get(PaymentAccount, dec.get("payment_account_id")) if dec.get("payment_account_id") else None
             if not pa or not pa.bexio_account_id:

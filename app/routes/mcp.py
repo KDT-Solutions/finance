@@ -297,7 +297,9 @@ def t_get_doc(db, a):
       {"id": {"type": "integer"}, "supplier_name": {"type": "string"}, "account_no": {"type": "string"}, "tax_code": {"type": "string"},
        "payment_mode": {"type": "string", "enum": ["open", "card", "private", "bank_paid"]}, "payment_account": {"type": "string"},
        "booking_text": {"type": "string"}, "amount": {"type": "number"}, "currency": {"type": "string"}, "doc_date": {"type": "string"},
-       "due_date": {"type": "string"}, "document_number": {"type": "string"}, "exchange_rate": {"type": "number", "description": "Kurs in CHF je Einheit Fremdwährung (optional, sonst bexio-Kurs zum Belegdatum)"}, "remember": {"type": "boolean", "default": False},
+       "due_date": {"type": "string"}, "document_number": {"type": "string"}, "exchange_rate": {"type": "number", "description": "Kurs in CHF je Einheit Fremdwährung (optional, sonst BAZG-Tageskurs zum Belegdatum)"},
+       "already_paid": {"type": "boolean", "default": False, "description": "offene Rechnung ist schon bezahlt: Ticket sofort schliessen, Ausgleich über Banksync (wird auch erkannt, wenn ein Agent 'bezahlt' ins Ticket geschrieben hat)"},
+       "remember": {"type": "boolean", "default": False},
        "keywords": {"type": "array", "items": {"type": "string"}}, "confirm": CONFIRM}, ["id"])
 def t_book(db, a):
     d = db.get(Document, int(a["id"]))
@@ -320,7 +322,7 @@ def t_book(db, a):
     if "payment_account" in a:
         pa = _payment_account(db, t, a["payment_account"])
         dec["payment_account_id"] = pa.id if pa else None
-    for k in ("booking_text", "amount", "currency", "doc_date", "due_date", "document_number", "exchange_rate"):
+    for k in ("booking_text", "amount", "currency", "doc_date", "due_date", "document_number", "exchange_rate", "already_paid"):
         if k in a and a[k] is not None:
             dec[k] = a[k]
     dec["payment_mode"] = dec.get("payment_mode") or "open"

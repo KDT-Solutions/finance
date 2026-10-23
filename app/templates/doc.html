@@ -62,6 +62,7 @@
       <label class="wide">Buchungstext <input name="booking_text" value="{{ dec.booking_text or '' }}"></label>
       <label class="wide">Regel-Stichwörter (optional, Komma) <input name="keywords" value="{{ (doc.rule.keywords|join(', ')) if doc.rule else '' }}"></label>
       <label class="check wide"><input type="checkbox" name="remember" value="1" checked> Regel für diesen Lieferanten merken (danach automatisch)</label>
+      <label class="check wide"><input type="checkbox" name="already_paid" value="1" {{ 'checked' if dec.already_paid }}> Bereits bezahlt (Ticket sofort schliessen, Ausgleich über Banksync)</label>
       <div class="actions wide">
         {% if doc.tenant.bexio_connected %}<button class="primary" {{ 'disabled' if doc.state == 'booked' }}>Buchen</button>{% else %}<span class="error">bexio für {{ doc.tenant.code }} nicht verbunden</span>{% endif %}
         <button formaction="/docs/{{ doc.id }}/save" class="secondary">Nur speichern</button>

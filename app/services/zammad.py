@@ -90,6 +90,26 @@ class ZammadClient:
             parts.append(body)
         return "\n".join(parts)[:6000]
 
+    def agent_marked_paid(self, ticket_id: int) -> bool:
+        """True if an agent (not the customer/sender) wrote 'bezahlt' into the ticket, e.g. as internal note,
+        and it is not a negation ('nicht bezahlt', 'unbezahlt')."""
+        import re
+
+        for art in self.articles(ticket_id):
+            if (art.get("sender") or "") != "Agent":
+                continue
+            body = art.get("body") or ""
+            if art.get("content_type") == "text/html":
+                body = re.sub(r"<[^>]+>", " ", body)
+            text = body.lower()
+            if text.startswith("finance:"):
+                continue
+            if re.search(r"\b(nicht|noch nicht|un)\s*bezahlt\b", text):
+                continue
+            if re.search(r"\bbezahlt\b", text):
+                return True
+        return False
+
     # --- writes (internal only) -------------------------------------------------
     def add_note(self, ticket_id: int, body: str) -> dict:
         return self._post("/api/v1/ticket_articles", {
