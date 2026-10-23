@@ -11,7 +11,9 @@ class Settings(BaseSettings):
     data_encryption_key: str
     admin_user: str = "admin"
     # argon2 hash of the admin password: python -m app.tools hash-password
-    admin_password_hash: str
+    admin_password_hash: str = ""
+    # same hash, base64-encoded: avoids "$" interpolation problems in compose/.env files
+    admin_password_hash_b64: str = ""
     # optional TOTP secret (base32) for a second factor: python -m app.tools totp-secret
     admin_totp_secret: str = ""
     public_base_url: str = "http://localhost:8000"
@@ -47,4 +49,9 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    s = Settings()
+    if s.admin_password_hash_b64 and not s.admin_password_hash:
+        import base64
+
+        s.admin_password_hash = base64.b64decode(s.admin_password_hash_b64).decode().strip()
+    return s

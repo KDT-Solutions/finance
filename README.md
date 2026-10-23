@@ -39,7 +39,7 @@ Secrets:
 ```
 openssl rand -hex 32                     # SECRET_KEY
 python -m app.tools fernet-key           # DATA_ENCRYPTION_KEY
-python -m app.tools hash-password        # ADMIN_PASSWORD_HASH
+python -m app.tools hash-password        # ADMIN_PASSWORD_HASH_B64
 python -m app.tools totp-secret          # ADMIN_TOTP_SECRET (optional)
 ```
 

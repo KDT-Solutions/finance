@@ -11,8 +11,11 @@ def main(argv: list[str]) -> int:
     if cmd == "hash-password":
         from argon2 import PasswordHasher
 
+        import base64
+
         pw = getpass.getpass("Passwort: ")
-        print(PasswordHasher().hash(pw))
+        h = PasswordHasher().hash(pw)
+        print("ADMIN_PASSWORD_HASH_B64=" + base64.b64encode(h.encode()).decode())
         return 0
     if cmd == "totp-secret":
         import pyotp
