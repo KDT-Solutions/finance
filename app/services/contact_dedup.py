@@ -53,9 +53,15 @@ def linked(client: bx.BexioClient, contact_id: int) -> dict:
     bills = [b for b in bills if b.get("supplier_id") in (None, contact_id)]
     expenses = _paged(client, "/4.0/expenses", supplier_id=contact_id)
     expenses = [e for e in expenses if e.get("supplier_id") in (None, contact_id)]
-    sales = 0
+    sales: int | None = 0
     for kind in ("kb_invoice", "kb_offer", "kb_order"):
-        sales += len(client.post(f"/2.0/{kind}/search", [{"field": "contact_id", "value": str(contact_id), "criteria": "="}], params={"limit": 50}) or [])
+        try:
+            sales += len(client.post(f"/2.0/{kind}/search", [{"field": "contact_id", "value": str(contact_id), "criteria": "="}], params={"limit": 50}) or [])
+        except bx.BexioError as e:
+            if e.status != 403:
+                raise
+            sales = None  # the app has no access to sales documents: unknown, checked separately before archiving
+            break
     paid = [b for b in bills if str(b.get("status", "")).upper() in PAID_STATES]
     open_ = [b for b in bills if b not in paid]
     return {"bills_open": [{"id": b["id"], "document_no": b.get("document_no"), "vendor_ref": b.get("vendor_ref"), "status": b.get("status"),
@@ -81,19 +87,21 @@ def analyze(db: Session, client: bx.BexioClient, tenant: Tenant) -> list[dict]:
             rows.append({"id": c["id"], "nr": c.get("nr"), "name": contact_name(c), "used_by_finance": c["id"] in used, **info})
         # main contact: the one finance uses, then the one with the most documents, then the oldest
         main = sorted(rows, key=lambda r: (not r["used_by_finance"],
-                                           -(r["bills_paid"] + len(r["bills_open"]) + r["expenses"] + r["sales_documents"]), r["id"]))[0]
+                                           -(r["bills_paid"] + len(r["bills_open"]) + r["expenses"] + (r["sales_documents"] or 0)), r["id"]))[0]
         out.append(plan({"key": key, "contacts": rows}, main["id"]))
     return out
 
 
-def plan(group: dict, main_id: int) -> dict:
+def plan(group: dict, main_id: int, sales_checked: set[int] | None = None) -> dict:
+    """sales_checked: contact ids whose sales documents were verified as none outside of finance (when the bexio app
+    has no access to sales documents); without that, a contact with unknown sales documents is only marked."""
     if main_id not in [r["id"] for r in group["contacts"]]:
         raise ValueError(f"Kontakt {main_id} gehört nicht zur Gruppe {group['key']}")
     group["main_contact_id"] = main_id
     for r in group["contacts"]:
         if r["id"] == main_id:
             r["action"] = "main"
-        elif r["bills_paid"] or r["expenses"] or r["sales_documents"]:
+        elif r["bills_paid"] or r["expenses"] or r["sales_documents"] or (r["sales_documents"] is None and r["id"] not in (sales_checked or set())):
             r["action"] = "mark"
         elif r["bills_open"]:
             r["action"] = "move"

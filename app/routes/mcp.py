@@ -684,7 +684,9 @@ def t_bexio_duplicates(db, a):
 @tool("clean_duplicate_contacts", "Doppelte bexio-Kontakte bereinigen gemäss bexio_duplicate_contacts. keys: nur diese Gruppen (Schlüssel aus der Analyse), "
       "leer = alle. main: {Schlüssel: Kontakt-ID} legt den Hauptkontakt einer Gruppe abweichend fest. Ohne confirm nur Vorschau.",
       {"tenant": TENANT, "keys": {"type": "array", "items": {"type": "string"}},
-       "main": {"type": "object", "additionalProperties": {"type": "integer"}}, "confirm": CONFIRM}, ["tenant"])
+       "main": {"type": "object", "additionalProperties": {"type": "integer"}},
+       "sales_checked": {"type": "array", "items": {"type": "integer"}, "description": "Kontakt-IDs, bei denen ausserhalb von finance geprüft wurde, dass keine Verkaufsdokumente daran hängen"},
+       "confirm": CONFIRM}, ["tenant"])
 def t_clean_duplicates(db, a):
     from ..services import contact_dedup
 
@@ -694,13 +696,13 @@ def t_clean_duplicates(db, a):
         groups = contact_dedup.analyze(db, c, t)
         if a.get("keys"):
             groups = [g for g in groups if g["key"] in a["keys"]]
-        for key, main_id in (a.get("main") or {}).items():
-            for g in groups:
-                if g["key"] == key:
-                    try:
-                        contact_dedup.plan(g, int(main_id))
-                    except ValueError as e:
-                        raise ToolError(str(e)) from e
+        checked = {int(x) for x in (a.get("sales_checked") or [])}
+        mains = {k: int(v) for k, v in (a.get("main") or {}).items()}
+        for g in groups:
+            try:
+                contact_dedup.plan(g, mains.get(g["key"], g["main_contact_id"]), checked)
+            except ValueError as e:
+                raise ToolError(str(e)) from e
         if not a.get("confirm"):
             return _preview(f"{len(groups)} Duplikatgruppen in {t.code} bereinigen",
                             {"groups": [{"key": g["key"], "main": g["main_contact_id"],
@@ -713,6 +715,13 @@ def t_clean_duplicates(db, a):
     audit.log(db, "bexio.duplicates_cleaned", tenant_id=t.id, actor=ACTOR, entity="tenant", entity_id=t.id, details={"results": results})
     db.commit()
     return {"ok": all(r["ok"] for r in results), "results": results}
+
+
+@tool("test_notification", "Pushover-Testnachricht senden (an Kims eigenes Gerät).", {})
+def t_test_notification(db, a):
+    from ..services.notify import pushover
+
+    return {"sent": pushover("finance: Test", "Pushover-Anbindung funktioniert.")}
 
 
 @tool("fix_open_bill", "Offene bexio-Rechnung eines Belegs korrigieren und verbuchen: Steuercode und/oder Konto auf den Positionen setzen, danach Status BOOKED. "
