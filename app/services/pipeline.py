@@ -374,7 +374,10 @@ def learn_from_history(db: Session, tenant: Tenant, months: int = 24) -> int:
     client = bx.BexioClient(db, tenant)
     created = 0
     try:
-        stats: dict[int, dict] = {}
+        # The list response carries no supplier_id (spec: id, document_no, status, vendor, lastname_company, gross,
+        # booking_account_ids ...), so bills are grouped by vendor name and the supplier contact id is read once per
+        # vendor from the bill detail.
+        by_vendor: dict[str, dict] = {}
         page = 1
         while True:
             # status filter values per spec: DRAFTS | TODO | PAID | OVERDUE; paging is 1-based "page"
@@ -383,17 +386,32 @@ def learn_from_history(db: Session, tenant: Tenant, months: int = 24) -> int:
             if not rows:
                 break
             for b in rows:
-                sid = b.get("supplier_id")
-                if not sid:
+                name = (b.get("vendor") or b.get("lastname_company") or "").strip()
+                if not name:
                     continue
-                st = stats.setdefault(sid, {"name": b.get("vendor") or b.get("lastname_company") or "", "accounts": {}, "amounts": []})
+                st = by_vendor.setdefault(rules.normalize_name(name), {"name": name, "accounts": {}, "amounts": [], "bill_id": b.get("id"), "sid": b.get("supplier_id")})
                 for acc in b.get("booking_account_ids") or []:
                     st["accounts"][acc] = st["accounts"].get(acc, 0) + 1
                 if b.get("gross"):
                     st["amounts"].append(float(b["gross"]))
+            paging = res.get("paging") if isinstance(res, dict) else None
+            if paging and page >= int(paging.get("page_count") or 1):
+                break
             if len(rows) < 500 or page > 40:
                 break
             page += 1
+        log.info("history %s: %d paid bills grouped into %d vendors", tenant.code, sum(len(v["amounts"]) for v in by_vendor.values()), len(by_vendor))
+        stats: dict[int, dict] = {}
+        for key, st in by_vendor.items():
+            sid = st.get("sid")
+            if not sid and st.get("bill_id"):
+                try:
+                    sid = client.get_bill(str(st["bill_id"])).get("supplier_id")
+                except bx.BexioError as e:
+                    log.warning("history: bill %s detail failed: %s", st["bill_id"], e)
+            if not sid:
+                continue
+            stats[int(sid)] = st
         for sid, st in stats.items():
             if not st["accounts"] or not st["name"]:
                 continue
