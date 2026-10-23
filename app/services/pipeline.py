@@ -414,7 +414,9 @@ def learn_from_history(db: Session, tenant: Tenant, months: int = 24) -> dict:
         bank_by_id = {b["id"]: b for b in (tenant.master_data or {}).get("bank_accounts", [])}
         pay_accounts = db.query(PaymentAccount).filter(PaymentAccount.tenant_id == tenant.id, PaymentAccount.active.is_(True)).all()
         pa_by_ledger = {pa.bexio_account_id: pa for pa in pay_accounts if pa.bexio_account_id}
-        mode_for_kind = {"card": "card", "private": "private", "bank": "bank_paid"}
+        # bills paid by bank transfer are the normal "open bill + bank sync" flow, so a bank payment account
+        # keeps payment_mode open; only card and private payments become paid receipts
+        mode_for_kind = {"card": "card", "private": "private"}
 
         for key, st in by_vendor.items():
             sid = st.get("sid")
@@ -444,8 +446,10 @@ def learn_from_history(db: Session, tenant: Tenant, months: int = 24) -> dict:
                 bank_id, _n = max(sources.items(), key=lambda kv: kv[1])
                 bank = bank_by_id.get(bank_id, {})
                 pa = pa_by_ledger.get(bank.get("account_id"))
-                if pa:
-                    payment_mode, payment_account_id = mode_for_kind.get(pa.kind, "bank_paid"), pa.id
+                if pa and pa.kind in mode_for_kind:
+                    payment_mode, payment_account_id = mode_for_kind[pa.kind], pa.id
+                elif pa:
+                    payment_mode, payment_account_id = "open", None
                 else:
                     label = bank.get("name") or f"bank_account {bank_id}"
                     unmapped[label] = unmapped.get(label, 0) + 1
