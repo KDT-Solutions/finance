@@ -65,6 +65,6 @@ python -m app.tools totp-secret          # ADMIN_TOTP_SECRET (optional)
 ## bexio API notes
 
 Purchase bills use API 4.0 (`POST /4.0/purchase/bills`, `PUT /4.0/purchase/bills/{id}/bookings/{status}`).
-The payload builder lives in `app/services/bexio.py` (`build_bill_payload`); adjust field
+The payload builder lives in `app/services/bexio.py` (`build_bill_payload`) and follows the OpenAPI spec embedded in docs.bexio.com; adjust field
 names there if bexio rejects the first real call (the error is shown on the document page).
 Manual entries use API 3.0 (`POST /3.0/accounting/manual_entries` + file attach on the line).

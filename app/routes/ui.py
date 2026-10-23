@@ -440,6 +440,7 @@ async def tenant_save(request: Request, code: str, db: Session = Depends(get_db)
     t.default_tax_id = integer(f.get("default_tax_id"))
     t.fx_diff_account_id = integer(f.get("fx_diff_account_id"))
     t.fee_account_id = integer(f.get("fee_account_id"))
+    t.bank_account_id = integer(f.get("bank_account_id"))
     t.active = f.get("active", "1") == "1"
     audit.log(db, "tenant.saved", tenant_id=t.id, actor=sess["u"], entity="tenant", entity_id=t.id)
     db.commit()

@@ -35,6 +35,8 @@ class Tenant(Base):
     fx_diff_account_id: Mapped[int | None] = mapped_column(Integer)
     fee_account_id: Mapped[int | None] = mapped_column(Integer)
     default_tax_id: Mapped[int | None] = mapped_column(Integer)
+    # bexio bank account (3.0/banking/accounts id) used as paying account on purchase bills
+    bank_account_id: Mapped[int | None] = mapped_column(Integer)
     # bexio user id used as contact_partner / owner when creating contacts
     bexio_user_id: Mapped[int | None] = mapped_column(Integer)
     # how to book paid receipts: "bill" (purchase bill + outgoing payment) or "entry" (manual entry)

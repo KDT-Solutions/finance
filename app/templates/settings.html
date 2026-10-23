@@ -27,6 +27,7 @@
     <label>Standard-Steuercode <select name="default_tax_id"><option value="">–</option>{% for x in md.get('taxes', []) if x.active %}<option value="{{ x.id }}" {{ 'selected' if x.id == t.default_tax_id }}>{{ x.code }} {{ x.name }}</option>{% endfor %}</select></label>
     <label>Kreditorenkonto <select name="creditor_account_id"><option value="">–</option>{% for a in md.get('accounts', []) %}<option value="{{ a.id }}" {{ 'selected' if a.id == t.creditor_account_id }}>{{ a.no }} {{ a.name }}</option>{% endfor %}</select></label>
     <label>Kursdifferenzen <select name="fx_diff_account_id"><option value="">–</option>{% for a in md.get('accounts', []) %}<option value="{{ a.id }}" {{ 'selected' if a.id == t.fx_diff_account_id }}>{{ a.no }} {{ a.name }}</option>{% endfor %}</select></label>
+    <label>Bankkonto für Zahlungen <select name="bank_account_id"><option value="">–</option>{% for b in md.get('bank_accounts', []) %}<option value="{{ b.id }}" {{ 'selected' if b.id == t.bank_account_id }}>{{ b.name }} {{ b.iban }}</option>{% endfor %}</select></label>
     <label>Gebühren <select name="fee_account_id"><option value="">–</option>{% for a in md.get('accounts', []) %}<option value="{{ a.id }}" {{ 'selected' if a.id == t.fee_account_id }}>{{ a.no }} {{ a.name }}</option>{% endfor %}</select></label>
     <label>Aktiv <select name="active"><option value="1" {{ 'selected' if t.active }}>ja</option><option value="0" {{ 'selected' if not t.active }}>nein</option></select></label>
     <div class="actions wide"><button>Speichern</button></div>

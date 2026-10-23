@@ -61,15 +61,38 @@ def extract(pdf_bytes: bytes, context: str = "") -> tuple[dict, str]:
         {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": base64.b64encode(pdf_bytes).decode()}},
         {"type": "text", "text": "Extract the document data. " + (f"Context from the e-mail: {context[:1500]}" if context else "")},
     ]
+    # Forced tool use (tool_choice type "tool"/"any") is not supported by every model, so the tool is offered with
+    # "auto" and the instruction makes the call mandatory; a JSON text answer is accepted as fallback.
+    content[-1]["text"] += " Always answer by calling the record_document tool exactly once, with no other text."
     resp = client.messages.create(
         model=s.anthropic_model,
         max_tokens=2000,
         system=SYSTEM,
-        tools=[{"name": "record_document", "description": "Record the extracted document data.", "input_schema": SCHEMA}],
-        tool_choice={"type": "tool", "name": "record_document"},
+        tools=[{"name": "record_document", "description": "Record the extracted document data. Must be called exactly once per document.", "input_schema": SCHEMA}],
+        tool_choice={"type": "auto", "disable_parallel_tool_use": True},
         messages=[{"role": "user", "content": content}],
     )
+    text_parts: list[str] = []
     for block in resp.content:
         if block.type == "tool_use" and block.name == "record_document":
             return dict(block.input), resp.model
+        if block.type == "text":
+            text_parts.append(block.text)
+    data = _json_from_text("\n".join(text_parts))
+    if data is not None:
+        return data, resp.model
     raise RuntimeError("no tool_use block in LLM response")
+
+
+def _json_from_text(text: str) -> dict | None:
+    import json
+    import re
+
+    m = re.search(r"\{.*\}", text, re.S)
+    if not m:
+        return None
+    try:
+        data = json.loads(m.group(0))
+    except json.JSONDecodeError:
+        return None
+    return data if isinstance(data, dict) and "is_receipt" in data else None

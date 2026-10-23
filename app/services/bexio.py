@@ -204,23 +204,30 @@ class BexioClient:
 
     # --- purchase bills (API 4.0) ----------------------------------------------------
     def list_bills(self, **params) -> dict:
+        """GET /4.0/purchase/bills. Filters per spec: limit (max 500), page (1-based), order, sort, search_term (min 3 chars),
+        status (DRAFTS | TODO | PAID | OVERDUE), bill_date_start/_end, due_date_start/_end, vendor_ref, document_no, supplier_id ..."""
+        if "status" in params and params["status"]:
+            params["status"] = str(params["status"]).upper()
         return self.get("/4.0/purchase/bills", **params) or {}
 
     def find_bill(self, supplier_id: int | None, document_no: str) -> dict | None:
         if not document_no:
             return None
-        res = self.list_bills(search_term=document_no, limit=20)
+        params = {"vendor_ref": document_no, "limit": 50}
+        if supplier_id:
+            params["supplier_id"] = supplier_id
+        res = self.list_bills(**params)
         for b in res.get("data", []) if isinstance(res, dict) else res:
-            if (b.get("vendor_ref") or b.get("document_no")) == document_no and (not supplier_id or b.get("supplier_id") == supplier_id):
+            if (b.get("vendor_ref") or "") == document_no and (not supplier_id or b.get("supplier_id") == supplier_id):
                 return b
         return None
 
     def create_bill(self, payload: dict) -> dict:
         return self.post("/4.0/purchase/bills", payload)
 
-    def set_bill_status(self, bill_id: str, status: str, payload: dict | None = None) -> dict:
-        """status: booked | draft ... (PUT /4.0/purchase/bills/{id}/bookings/{status})"""
-        return self.put(f"/4.0/purchase/bills/{bill_id}/bookings/{status}", payload or {})
+    def set_bill_status(self, bill_id: str, status: str) -> dict:
+        """status: DRAFT | BOOKED (PUT /4.0/purchase/bills/{id}/bookings/{status}, no body)"""
+        return self.put(f"/4.0/purchase/bills/{bill_id}/bookings/{status.upper()}", None)
 
     def get_bill(self, bill_id: str) -> dict:
         return self.get(f"/4.0/purchase/bills/{bill_id}")
@@ -241,42 +248,67 @@ class BexioClient:
 
 
 # --- payload builders ---------------------------------------------------------------
-def build_bill_payload(*, supplier_id: int, contact_partner_id: int | None, document_no: str, title: str,
+def build_bill_payload(*, supplier_id: int, contact_partner_id: int | None, supplier_name: str, document_no: str, title: str,
                        bill_date: str, due_date: str, currency: str, amount_gross: float, account_id: int,
-                       tax_id: int | None, text: str, attachment_ids: list[str], qr: dict | None) -> dict:
+                       tax_id: int | None, text: str, attachment_ids: list[str], qr: dict | None,
+                       bank_account_id: int | None = None) -> dict:
+    """POST /4.0/purchase/bills body per the bexio OpenAPI spec (required: supplier_id, contact_partner_id, currency_code,
+    address, bill_date, due_date, manual_amount, item_net, line_items, discounts, attachment_ids; amount_calc when
+    manual_amount is false). Line items carry 'title', not 'text'. Payment: type IBAN | QR | MANUAL with
+    execution_date, amount, salary_payment required; iban, name, reference_no (27), message (140), bank_account_id."""
+    amount = round(float(amount_gross), 2)
+    due = due_date or bill_date
+    line = {
+        "position": 0,
+        "title": (text or title or document_no or "Rechnung")[:80],
+        "amount": amount,
+        "booking_account_id": account_id,
+    }
+    if tax_id:
+        line["tax_id"] = tax_id
     payload = {
         "supplier_id": supplier_id,
-        "contact_partner_id": contact_partner_id,
-        "vendor_ref": (document_no or "")[:80],
         "title": (title or document_no or "Rechnung")[:80],
         "bill_date": bill_date,
-        "due_date": due_date or bill_date,
+        "due_date": due,
         "currency_code": currency or "CHF",
         "manual_amount": False,
+        "amount_calc": amount,
         "item_net": False,
-        "line_items": [{
-            "position": 0,
-            "amount": round(float(amount_gross), 2),
-            "tax_id": tax_id,
-            "booking_account_id": account_id,
-            "text": (text or title or "")[:255],
-        }],
-        "attachment_ids": attachment_ids,
+        "address": {
+            "lastname_company": (supplier_name or "Lieferant")[:80],
+            "type": "COMPANY",
+            "main_contact_id": supplier_id,
+        },
+        "line_items": [line],
         "discounts": [],
+        "attachment_ids": list(attachment_ids or []),
     }
+    if contact_partner_id:
+        payload["contact_partner_id"] = contact_partner_id
+    if document_no:
+        payload["vendor_ref"] = document_no[:255]
     if qr and qr.get("iban"):
+        iban = qr["iban"].replace(" ", "")
+        is_qr = bool(qr.get("is_qr_iban") or qr.get("reference_type") == "QRR")
         pay = {
-            "type": "QR" if qr.get("is_qr_iban") or qr.get("reference_type") == "QRR" else "IBAN",
-            "iban": qr["iban"],
-            "receiver_name": qr.get("creditor_name", "")[:70],
+            "type": "QR" if is_qr else "IBAN",
+            "execution_date": due,
+            "amount": amount,
+            "salary_payment": False,
+            "iban": iban,
         }
-        if qr.get("reference_type") == "QRR":
-            pay["qr_reference"] = qr.get("reference", "")
-        elif qr.get("reference_type") == "SCOR":
-            pay["creditor_reference"] = qr.get("reference", "")
+        if qr.get("creditor_name"):
+            pay["name"] = qr["creditor_name"][:70]
+        if qr.get("reference") and qr.get("reference_type") in ("QRR", "SCOR"):
+            pay["reference_no"] = qr["reference"].replace(" ", "")[:27]
         if qr.get("message"):
             pay["message"] = qr["message"][:140]
+        if bank_account_id:
+            pay["bank_account_id"] = bank_account_id
         payload["payment"] = pay
+        if qr.get("billing_info"):
+            payload["qr_bill_information"] = qr["billing_info"][:255]
     return payload
 
 

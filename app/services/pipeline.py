@@ -197,6 +197,34 @@ def _master(tenant: Tenant, kind: str, id_: int | None) -> dict:
     return {}
 
 
+def _create_bill(db: Session, client: bx.BexioClient, tenant: Tenant, kw: dict) -> tuple[dict, dict]:
+    """POST the bill. The spec marks contact_partner_id as required but does not say which id it expects
+    (own bexio user or supplier contact). Try the variants in order, remember the one bexio accepts per tenant."""
+    key = f"bexio_bill_partner:{tenant.code}"
+    variants = [("user", tenant.bexio_user_id), ("supplier", kw["supplier_id"]), ("none", None)]
+    known = _kv_get(db, key)
+    if known:
+        variants.sort(key=lambda v: 0 if v[0] == known else 1)
+    last: bx.BexioError | None = None
+    for name, pid in variants:
+        if name != "none" and not pid:
+            continue
+        payload = bx.build_bill_payload(contact_partner_id=pid, **kw)
+        try:
+            created = client.create_bill(payload)
+        except bx.BexioError as e:
+            msg = str(e)
+            if "contact_partner" not in msg and "400" not in msg:
+                raise
+            log.warning("create_bill variant %s rejected: %s", name, msg[:300])
+            last = e
+            continue
+        if known != name:
+            _kv_set(db, key, name)
+        return payload, created
+    raise last or RuntimeError("create_bill failed")
+
+
 def _ensure_contact(client: bx.BexioClient, supplier: Supplier, llm: dict) -> int:
     if supplier.bexio_contact_id:
         return supplier.bexio_contact_id
@@ -240,20 +268,20 @@ def book(db: Session, z: ZammadClient | None, doc: Document, *, actor: str = "sy
             else:
                 f = client.upload_file(doc.filename or "beleg.pdf", pdf)
                 file_id = str(f.get("uuid") or f.get("id"))
-                payload = bx.build_bill_payload(
-                    supplier_id=contact_id, contact_partner_id=None, document_no=docno, title=desc or docno,
+                payload, created = _create_bill(db, client, tenant, dict(
+                    supplier_id=contact_id, supplier_name=doc.supplier.display_name if doc.supplier else (dec.get("supplier_name") or ""),
+                    document_no=docno, title=desc or docno,
                     bill_date=dec.get("doc_date") or now().date().isoformat(), due_date=dec.get("due_date") or "",
                     currency=dec.get("currency") or "CHF", amount_gross=amount, account_id=int(dec["account_id"]),
-                    tax_id=dec.get("tax_id"), text=desc, attachment_ids=[file_id], qr=qr,
-                )
-                created = client.create_bill(payload)
+                    tax_id=dec.get("tax_id"), text=desc, attachment_ids=[file_id], qr=qr, bank_account_id=tenant.bank_account_id,
+                ))
                 bill_id = str(created.get("id"))
                 try:
-                    client.set_bill_status(bill_id, "booked")
-                    status = "booked"
+                    client.set_bill_status(bill_id, "BOOKED")
+                    status = "BOOKED"
                 except bx.BexioError as e:
                     log.warning("bill %s created but not booked: %s", bill_id, e)
-                    status = "draft"
+                    status = "DRAFT"
                 booking.kind, booking.bexio_bill_id, booking.bexio_file_id, booking.payload, booking.response, booking.bexio_status = "bill_open", bill_id, file_id, payload, created, status
             note = f"finance: Kreditorenrechnung in bexio angelegt (offen).\nLieferant: {dec.get('supplier_name')}\nBetrag: {booking.currency} {amount:.2f}\nKonto: {_master(tenant, 'accounts', dec.get('account_id')).get('no', dec.get('account_id'))}, Steuercode: {_master(tenant, 'taxes', dec.get('tax_id')).get('code', dec.get('tax_id') or '-')}\nbexio Bill-ID: {booking.bexio_bill_id}"
             close_ticket = False
@@ -347,9 +375,10 @@ def learn_from_history(db: Session, tenant: Tenant, months: int = 24) -> int:
     created = 0
     try:
         stats: dict[int, dict] = {}
-        offset = 0
+        page = 1
         while True:
-            res = client.list_bills(limit=500, offset=offset, status="paid")
+            # status filter values per spec: DRAFTS | TODO | PAID | OVERDUE; paging is 1-based "page"
+            res = client.list_bills(limit=500, page=page, status="PAID")
             rows = res.get("data", []) if isinstance(res, dict) else res
             if not rows:
                 break
@@ -362,9 +391,9 @@ def learn_from_history(db: Session, tenant: Tenant, months: int = 24) -> int:
                     st["accounts"][acc] = st["accounts"].get(acc, 0) + 1
                 if b.get("gross"):
                     st["amounts"].append(float(b["gross"]))
-            if len(rows) < 500:
+            if len(rows) < 500 or page > 40:
                 break
-            offset += 500
+            page += 1
         for sid, st in stats.items():
             if not st["accounts"] or not st["name"]:
                 continue
