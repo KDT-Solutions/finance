@@ -98,6 +98,7 @@ def ingest_tenant(db: Session, z: ZammadClient, tenant: Tenant) -> int:
 def process_document(db: Session, z: ZammadClient | None, doc: Document) -> None:
     tenant = doc.tenant
     s = get_settings()
+    doc.last_error = None
     try:
         pdf = read_pdf(doc)
         swiss = qrmod.read_swiss_qr(pdf)
