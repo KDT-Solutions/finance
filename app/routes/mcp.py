@@ -583,6 +583,81 @@ def t_audit(db, a):
             for r in q.order_by(AuditLog.id.desc()).limit(int(a.get("limit") or 50)).all()]
 
 
+@tool("bexio_bills", "Kreditorenrechnungen direkt aus bexio lesen (nur lesend): Filter status DRAFTS|TODO|PAID|OVERDUE, vendor (Lieferantenname), vendor_ref, document_no.",
+      {"tenant": TENANT, "status": {"type": "string"}, "vendor": {"type": "string"}, "vendor_ref": {"type": "string"}, "document_no": {"type": "string"},
+       "limit": {"type": "integer", "default": 20}}, ["tenant"])
+def t_bexio_bills(db, a):
+    t = _tenant(db, a["tenant"])
+    if not t.bexio_connected:
+        raise ToolError(f"{t.code}: bexio nicht verbunden")
+    params = {k: a[k] for k in ("status", "vendor", "vendor_ref", "document_no") if a.get(k)}
+    params["limit"] = int(a.get("limit") or 20)
+    c = bx.BexioClient(db, t)
+    try:
+        res = c.list_bills(**params)
+    finally:
+        c.close()
+    rows = res.get("data", []) if isinstance(res, dict) else res
+    return [{k: b.get(k) for k in ("id", "document_no", "vendor_ref", "title", "status", "vendor", "bill_date", "due_date", "currency_code", "gross", "net",
+                                   "pending_amount", "booking_account_ids")} for b in rows]
+
+
+@tool("bexio_bill", "Eine Kreditorenrechnung im Detail aus bexio lesen (Positionen mit Konto und Steuer, Zahlung, Anhänge).",
+      {"tenant": TENANT, "bill_id": {"type": "string", "description": "bexio Bill-UUID"}}, ["tenant", "bill_id"])
+def t_bexio_bill(db, a):
+    t = _tenant(db, a["tenant"])
+    c = bx.BexioClient(db, t)
+    try:
+        bill = c.get_bill(a["bill_id"])
+    finally:
+        c.close()
+    for li in bill.get("line_items", []):
+        li["account_no"] = pipeline._master(t, "accounts", li.get("booking_account_id")).get("no")
+        li["tax_code"] = pipeline._master(t, "taxes", li.get("tax_id")).get("code")
+    return bill
+
+
+@tool("fix_open_bill", "Offene bexio-Rechnung eines Belegs korrigieren und verbuchen: Steuercode und/oder Konto auf den Positionen setzen, danach Status BOOKED. "
+      "Für Belege, deren Rechnung in bexio noch als Entwurf (DRAFT) steht, z.B. nach PURCHASES.VALIDATION.TAX_INCORRECT.",
+      {"id": {"type": "integer", "description": "Beleg-ID"}, "tax_code": {"type": "string"}, "account_no": {"type": "string"}, "confirm": CONFIRM}, ["id"])
+def t_fix_open_bill(db, a):
+    d = db.get(Document, int(a["id"]))
+    if not d or not d.booking or d.booking.kind != "bill_open" or not d.booking.bexio_bill_id:
+        raise ToolError("Beleg hat keine offene bexio-Rechnung")
+    t = d.tenant
+    tx = _tax(t, a.get("tax_code")) if a.get("tax_code") else None
+    acc = _account(t, a.get("account_no")) if a.get("account_no") else None
+    if not a.get("confirm"):
+        return _preview(f"Rechnung {d.booking.bexio_bill_id} anpassen und buchen", {"tax_code": tx["code"] if tx else None, "account_no": acc["no"] if acc else None})
+    c = bx.BexioClient(db, t)
+    try:
+        bill = c.get_bill(d.booking.bexio_bill_id)
+        if tx or acc:
+            body = c.bill_update_payload(bill)
+            for li in body["line_items"]:
+                if tx:
+                    li["tax_id"] = tx["id"]
+                if acc:
+                    li["booking_account_id"] = acc["id"]
+            bill = c.update_bill(d.booking.bexio_bill_id, body)
+        if str(bill.get("status", "")).upper() == "DRAFT":
+            c.set_bill_status(d.booking.bexio_bill_id, "BOOKED")
+            bill = c.get_bill(d.booking.bexio_bill_id)
+    finally:
+        c.close()
+    d.booking.bexio_status = bill.get("status")
+    d.booking.response = bill
+    dec = dict(d.decision or {})
+    if tx:
+        dec["tax_id"] = tx["id"]
+    if acc:
+        dec["account_id"] = acc["id"]
+    d.decision = dec
+    audit.log(db, "booking.fixed", tenant_id=t.id, actor=ACTOR, entity="booking", entity_id=d.booking.id, details={"tax_code": tx["code"] if tx else None, "account_no": acc["no"] if acc else None, "status": bill.get("status")})
+    db.commit()
+    return {"ok": True, "bexio_status": bill.get("status"), "bill_id": d.booking.bexio_bill_id}
+
+
 # --- JSON-RPC transport ---------------------------------------------------------------
 def _authorized(request: Request) -> bool:
     token = get_settings().mcp_token

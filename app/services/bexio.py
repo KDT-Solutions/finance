@@ -249,6 +249,30 @@ class BexioClient:
     def get_bill(self, bill_id: str) -> dict:
         return self.get(f"/4.0/purchase/bills/{bill_id}")
 
+    def update_bill(self, bill_id: str, payload: dict) -> dict:
+        """PUT /4.0/purchase/bills/{id}; required: supplier_id, contact_partner_id, manual_amount, currency_code, address,
+        bill_date, due_date, line_items, item_net, split_into_line_items, discounts, attachment_ids."""
+        return self.put(f"/4.0/purchase/bills/{bill_id}", payload)
+
+    def bill_update_payload(self, bill: dict) -> dict:
+        """Turn a GET bill response into a PUT body (read-only fields dropped)."""
+        keys = ("document_no", "title", "supplier_id", "vendor_ref", "amount_man", "amount_calc", "manual_amount", "contact_partner_id",
+                "bill_date", "due_date", "currency_code", "exchange_rate", "item_net", "split_into_line_items", "base_currency_amount",
+                "attachment_ids", "address", "line_items", "discounts", "payment")
+        out = {k: bill[k] for k in keys if k in bill and bill[k] is not None}
+        out.setdefault("split_into_line_items", False)
+        out.setdefault("discounts", [])
+        out.setdefault("attachment_ids", [])
+        out["line_items"] = [{k: li[k] for k in ("id", "position", "title", "tax_id", "amount", "booking_account_id") if k in li and li[k] is not None}
+                             for li in bill.get("line_items", [])]
+        if out.get("payment"):
+            pay = out["payment"]
+            out["payment"] = {k: pay[k] for k in ("type", "bank_account_id", "fee", "execution_date", "exchange_rate", "amount", "iban", "name",
+                                                   "address", "street", "house_no", "postcode", "city", "country_code", "message", "booking_text",
+                                                   "salary_payment", "reference_no", "note") if k in pay and pay[k] is not None}
+            out["payment"].setdefault("salary_payment", False)
+        return out
+
     def create_outgoing_payment(self, payload: dict) -> dict:
         return self.post("/4.0/purchase/outgoing-payments", payload)
 
