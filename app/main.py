@@ -7,6 +7,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.middleware.cors import CORSMiddleware
 
 from . import __version__
 from .db import init_db
@@ -50,3 +51,16 @@ async def security_headers(request: Request, call_next):
     resp.headers.setdefault("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-src 'self'; object-src 'self'")
     resp.headers.setdefault("Strict-Transport-Security", "max-age=31536000")
     return resp
+
+
+# CORS only for the MCP endpoint: browser-based MCP clients (claude.ai) call it cross-origin and
+# send a preflight OPTIONS without the Authorization header. The UI keeps same-origin policy.
+_cors_mcp = CORSMiddleware(app, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
+                           expose_headers=["Mcp-Session-Id", "MCP-Protocol-Version"])
+
+
+async def application(scope, receive, send):
+    if scope["type"] == "http" and scope.get("path", "").rstrip("/") == "/mcp":
+        await _cors_mcp(scope, receive, send)
+        return
+    await app(scope, receive, send)

@@ -9,6 +9,7 @@ from __future__ import annotations
 import hmac
 import json
 import logging
+import secrets
 from typing import Any, Callable
 
 from fastapi import APIRouter, Request
@@ -651,7 +652,13 @@ async def mcp_post(request: Request):
     if not isinstance(body, dict):
         return _rpc_error(None, -32600, "invalid request", 400)
     res = _handle(body)
-    return JSONResponse(res) if res is not None else Response(status_code=202)
+    if res is None:
+        return Response(status_code=202)
+    headers = {}
+    if body.get("method") == "initialize":
+        # stateless server; a session id is returned anyway because some clients expect one
+        headers["Mcp-Session-Id"] = secrets.token_hex(16)
+    return JSONResponse(res, headers=headers)
 
 
 @router.get("/mcp")
