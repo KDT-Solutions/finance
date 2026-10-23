@@ -154,6 +154,23 @@ class BexioClient:
     def currencies(self) -> list[dict]:
         return self.get("/3.0/currencies") or []
 
+    def exchange_rate(self, currency_code: str, date: str = "") -> float | None:
+        """Rate of currency_code in CHF (bexio exchange rates of the currency, GET /3.0/currencies/{id}/exchange_rates?date=)."""
+        code = (currency_code or "").upper()
+        if code in ("", "CHF"):
+            return 1.0
+        cur = next((c for c in (self.tenant.master_data or {}).get("currencies", []) if c.get("code") == code), None)
+        if not cur:
+            cur = next(({"id": c["id"], "code": c.get("name")} for c in self.currencies() if c.get("name") == code), None)
+        if not cur:
+            return None
+        params = {"date": date} if date else {}
+        rates = self.get(f"/3.0/currencies/{cur['id']}/exchange_rates", **params) or []
+        for r in rates:
+            if (r.get("exchange_currency") or {}).get("name") == "CHF" and r.get("factor_nr"):
+                return float(r["factor_nr"])
+        return None
+
     def bank_accounts(self) -> list[dict]:
         return self.get("/3.0/banking/accounts") or []
 
@@ -251,7 +268,7 @@ class BexioClient:
 def build_bill_payload(*, supplier_id: int, contact_partner_id: int | None, supplier_name: str, document_no: str, title: str,
                        bill_date: str, due_date: str, currency: str, amount_gross: float, account_id: int,
                        tax_id: int | None, text: str, attachment_ids: list[str], qr: dict | None,
-                       bank_account_id: int | None = None) -> dict:
+                       bank_account_id: int | None = None, exchange_rate: float | None = None) -> dict:
     """POST /4.0/purchase/bills body per the bexio OpenAPI spec (required: supplier_id, contact_partner_id, currency_code,
     address, bill_date, due_date, manual_amount, item_net, line_items, discounts, attachment_ids; amount_calc when
     manual_amount is false). Line items carry 'title', not 'text'. Payment: type IBAN | QR | MANUAL with
@@ -284,6 +301,12 @@ def build_bill_payload(*, supplier_id: int, contact_partner_id: int | None, supp
         "discounts": [],
         "attachment_ids": list(attachment_ids or []),
     }
+    if (currency or "CHF").upper() != "CHF":
+        # required by bexio for foreign-currency bills
+        if not exchange_rate:
+            raise BexioError(f"Kein Wechselkurs für {currency}")
+        payload["exchange_rate"] = round(float(exchange_rate), 10)
+        payload["base_currency_amount"] = round(amount * float(exchange_rate), 2)
     if contact_partner_id:
         payload["contact_partner_id"] = contact_partner_id
     if document_no:

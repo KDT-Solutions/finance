@@ -267,6 +267,10 @@ def book(db: Session, z: ZammadClient | None, doc: Document, *, actor: str = "sy
             if existing:
                 booking.kind, booking.bexio_bill_id, booking.response, booking.bexio_status = "bill_open", str(existing.get("id")), existing, existing.get("status")
             else:
+                currency = (dec.get("currency") or "CHF").upper()
+                rate = dec.get("exchange_rate") or (client.exchange_rate(currency, dec.get("doc_date") or "") if currency != "CHF" else 1.0)
+                if currency != "CHF" and not rate:
+                    raise RuntimeError(f"Kein Wechselkurs für {currency} in bexio (Währung in bexio anlegen oder Kurs im Beleg setzen)")
                 f = client.upload_file(doc.filename or "beleg.pdf", pdf)
                 file_id = str(f.get("uuid") or f.get("id"))
                 payload, created = _create_bill(db, client, tenant, dict(
@@ -275,6 +279,7 @@ def book(db: Session, z: ZammadClient | None, doc: Document, *, actor: str = "sy
                     bill_date=dec.get("doc_date") or now().date().isoformat(), due_date=dec.get("due_date") or "",
                     currency=dec.get("currency") or "CHF", amount_gross=amount, account_id=int(dec["account_id"]),
                     tax_id=dec.get("tax_id"), text=desc, attachment_ids=[file_id], qr=qr, bank_account_id=tenant.bank_account_id,
+                    exchange_rate=rate,
                 ))
                 bill_id = str(created.get("id"))
                 try:
