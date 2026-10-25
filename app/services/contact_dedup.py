@@ -5,6 +5,9 @@ contact is kept and each duplicate is handled by what is linked to it:
   archive  - nothing linked: the contact is archived
   move     - only open/draft purchase bills: the bills are moved to the main contact, then the contact is archived
   mark     - paid bills, expenses or sales documents: the contact stays and gets a name suffix so nobody picks it
+With archive_paid the duplicate is archived even with paid bills or expenses (they stay on the archived contact);
+sales documents still lead to mark. Archived contacts are not part of the bexio contact list (show_archived lists
+only archived ones), so the analysis reports them separately per group.
 """
 
 from __future__ import annotations
@@ -27,10 +30,12 @@ def contact_name(c: dict) -> str:
     return " ".join(x for x in (c.get("name_1"), c.get("name_2")) if x).strip()
 
 
-def all_contacts(client: bx.BexioClient) -> list[dict]:
+def all_contacts(client: bx.BexioClient, archived: bool = False) -> list[dict]:
+    """bexio lists either active contacts (default) or only archived ones (show_archived=true)."""
     out, offset = [], 0
+    extra = {"show_archived": "true"} if archived else {}
     while True:
-        page = client.get("/2.0/contact", limit=2000, offset=offset) or []
+        page = client.get("/2.0/contact", limit=2000, offset=offset, **extra) or []
         out.extend(page)
         if len(page) < 2000:
             return out
@@ -46,6 +51,16 @@ def _paged(client: bx.BexioClient, path: str, **params) -> list[dict]:
         if len(data) < 500:
             return rows
         page += 1
+
+
+def fetch_contact(client: bx.BexioClient, contact_id: int) -> tuple[dict, bool]:
+    """Contact and whether it is archived (an archived contact is only returned with show_archived=true)."""
+    try:
+        return client.get(f"/2.0/contact/{contact_id}"), False
+    except bx.BexioError as e:
+        if e.status != 404:
+            raise
+    return client.get(f"/2.0/contact/{contact_id}", show_archived="true"), True
 
 
 def linked(client: bx.BexioClient, contact_id: int) -> dict:
@@ -76,6 +91,11 @@ def analyze(db: Session, client: bx.BexioClient, tenant: Tenant) -> list[dict]:
         key = normalize_name(contact_name(c))
         if key and not contact_name(c).endswith(MARK.strip()):
             groups.setdefault(key, []).append(c)
+    archived: dict[str, list[dict]] = {}
+    for c in all_contacts(client, archived=True):
+        key = normalize_name(contact_name(c).removesuffix(MARK.strip()).strip())
+        if key:
+            archived.setdefault(key, []).append({"id": c["id"], "nr": c.get("nr"), "name": contact_name(c)})
     used = {s.bexio_contact_id for s in db.query(Supplier).filter(Supplier.tenant_id == tenant.id, Supplier.bexio_contact_id.isnot(None))}
     out = []
     for key, members in sorted(groups.items()):
@@ -84,24 +104,28 @@ def analyze(db: Session, client: bx.BexioClient, tenant: Tenant) -> list[dict]:
         rows = []
         for c in sorted(members, key=lambda c: c["id"]):
             info = linked(client, c["id"])
-            rows.append({"id": c["id"], "nr": c.get("nr"), "name": contact_name(c), "used_by_finance": c["id"] in used, **info})
+            rows.append({"id": c["id"], "nr": c.get("nr"), "name": contact_name(c), "archived": False, "used_by_finance": c["id"] in used, **info})
         # main contact: the one finance uses, then the one with the most documents, then the oldest
         main = sorted(rows, key=lambda r: (not r["used_by_finance"],
                                            -(r["bills_paid"] + len(r["bills_open"]) + r["expenses"] + (r["sales_documents"] or 0)), r["id"]))[0]
-        out.append(plan({"key": key, "contacts": rows}, main["id"]))
+        out.append(plan({"key": key, "contacts": rows, "already_archived": archived.get(key, [])}, main["id"]))
     return out
 
 
-def plan(group: dict, main_id: int, sales_checked: set[int] | None = None) -> dict:
+def plan(group: dict, main_id: int, sales_checked: set[int] | None = None, archive_paid: bool = False) -> dict:
     """sales_checked: contact ids whose sales documents were verified as none outside of finance (when the bexio app
-    has no access to sales documents); without that, a contact with unknown sales documents is only marked."""
+    has no access to sales documents); without that, a contact with unknown sales documents is only marked.
+    archive_paid: paid bills and expenses no longer force mark, the contact is archived and they stay on it."""
     if main_id not in [r["id"] for r in group["contacts"]]:
         raise ValueError(f"Kontakt {main_id} gehört nicht zur Gruppe {group['key']}")
     group["main_contact_id"] = main_id
     for r in group["contacts"]:
+        sales_unknown = r["sales_documents"] is None and r["id"] not in (sales_checked or set())
         if r["id"] == main_id:
             r["action"] = "main"
-        elif r["bills_paid"] or r["expenses"] or r["sales_documents"] or (r["sales_documents"] is None and r["id"] not in (sales_checked or set())):
+        elif r.get("archived"):
+            r["action"] = "none"  # already archived, nothing to do
+        elif r["sales_documents"] or sales_unknown or (not archive_paid and (r["bills_paid"] or r["expenses"])):
             r["action"] = "mark"
         elif r["bills_open"]:
             r["action"] = "move"
@@ -152,7 +176,7 @@ def clean_group(db: Session, client: bx.BexioClient, tenant: Tenant, group: dict
     main = client.get(f"/2.0/contact/{group['main_contact_id']}")
     results = []
     for r in group["contacts"]:
-        if r["action"] == "main":
+        if r["action"] in ("main", "none"):
             continue
         res = {"id": r["id"], "name": r["name"], "action": r["action"], "ok": False}
         try:
@@ -164,6 +188,8 @@ def clean_group(db: Session, client: bx.BexioClient, tenant: Tenant, group: dict
                 archive_contact(client, r["id"])
             elif r["action"] == "archive":
                 archive_contact(client, r["id"])
+                if r.get("bills_paid") or r.get("expenses"):
+                    res["kept_on_archived"] = {"bills_paid": r.get("bills_paid"), "expenses": r.get("expenses")}
             elif r["action"] == "mark":
                 res["new_name"] = mark_contact(client, client.get(f"/2.0/contact/{r['id']}"))
             for s in db.query(Supplier).filter(Supplier.tenant_id == tenant.id, Supplier.bexio_contact_id == r["id"]):

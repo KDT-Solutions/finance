@@ -666,7 +666,8 @@ def t_bexio_bill(db, a):
 
 @tool("bexio_duplicate_contacts", "Doppelte Kontakte in bexio finden (gleicher Name, Schreibweise egal). Pro Kontakt: offene und bezahlte "
       "Kreditorenrechnungen, Ausgaben, Verkaufsdokumente und die geplante Aktion (main = bleibt, archive = archivieren, "
-      "move = offene Rechnungen auf Hauptkontakt umhängen und archivieren, mark = als Duplikat kennzeichnen). Nur lesend.",
+      "move = offene Rechnungen auf Hauptkontakt umhängen und archivieren, mark = als Duplikat kennzeichnen). already_archived: "
+      "bereits archivierte Kontakte mit gleichem Namen (die Analyse vergleicht nur aktive Kontakte). Nur lesend.",
       {"tenant": TENANT}, ["tenant"])
 def t_bexio_duplicates(db, a):
     from ..services import contact_dedup
@@ -682,12 +683,15 @@ def t_bexio_duplicates(db, a):
 
 
 @tool("clean_duplicate_contacts", "Doppelte bexio-Kontakte bereinigen gemäss bexio_duplicate_contacts. keys: nur diese Gruppen (Schlüssel aus der Analyse), "
-      "leer = alle. main: {Schlüssel: Kontakt-ID} legt den Hauptkontakt einer Gruppe abweichend fest. Ohne confirm nur Vorschau.",
+      "leer = alle. main: {Schlüssel: Kontakt-ID} legt den Hauptkontakt einer Gruppe abweichend fest. archive_paid: Duplikate mit bezahlten "
+      "Rechnungen oder Ausgaben archivieren statt nur markieren (die Belege bleiben am archivierten Kontakt). Ohne confirm nur Vorschau.",
       {"tenant": TENANT, "keys": {"type": "array", "items": {"type": "string"}},
        "main": {"type": "object", "additionalProperties": {"type": "integer"}},
        "sales_checked": {"type": "array", "items": {"type": "integer"}, "description": "Kontakt-IDs, bei denen ausserhalb von finance geprüft wurde, dass keine Verkaufsdokumente daran hängen"},
        "pair": {"type": "object", "properties": {"main_contact_id": {"type": "integer"}, "duplicate_contact_id": {"type": "integer"}},
                 "description": "Einzelnes Duplikat mit abweichendem Namen (wird von der Analyse nicht gefunden) statt der Analyse-Gruppen"},
+       "archive_paid": {"type": "boolean", "default": False,
+                        "description": "Duplikate mit bezahlten Kreditorenrechnungen oder Ausgaben archivieren statt markieren; Verkaufsdokumente führen weiterhin zu mark"},
        "confirm": CONFIRM}, ["tenant"])
 def t_clean_duplicates(db, a):
     from ..services import contact_dedup
@@ -699,8 +703,11 @@ def t_clean_duplicates(db, a):
             m, d = int(a["pair"]["main_contact_id"]), int(a["pair"]["duplicate_contact_id"])
             rows = []
             for cid in (m, d):
-                ct = c.get(f"/2.0/contact/{cid}")
-                rows.append({"id": cid, "nr": ct.get("nr"), "name": contact_dedup.contact_name(ct), "used_by_finance": False, **contact_dedup.linked(c, cid)})
+                ct, is_archived = contact_dedup.fetch_contact(c, cid)
+                if is_archived and cid == m:
+                    raise ToolError(f"Hauptkontakt {m} ist archiviert")
+                rows.append({"id": cid, "nr": ct.get("nr"), "name": contact_dedup.contact_name(ct), "archived": is_archived, "used_by_finance": False,
+                             **contact_dedup.linked(c, cid)})
             groups = [{"key": f"pair:{m}:{d}", "main_contact_id": m, "contacts": rows}]
         else:
             groups = contact_dedup.analyze(db, c, t)
@@ -710,13 +717,14 @@ def t_clean_duplicates(db, a):
         mains = {k: int(v) for k, v in (a.get("main") or {}).items()}
         for g in groups:
             try:
-                contact_dedup.plan(g, mains.get(g["key"], g["main_contact_id"]), checked)
+                contact_dedup.plan(g, mains.get(g["key"], g["main_contact_id"]), checked, bool(a.get("archive_paid")))
             except ValueError as e:
                 raise ToolError(str(e)) from e
         if not a.get("confirm"):
             return _preview(f"{len(groups)} Duplikatgruppen in {t.code} bereinigen",
                             {"groups": [{"key": g["key"], "main": g["main_contact_id"],
-                                         "contacts": [{k: r[k] for k in ("id", "name", "action")} for r in g["contacts"]]} for g in groups]})
+                                         "contacts": [{k: r.get(k) for k in ("id", "name", "archived", "bills_paid", "expenses", "action")} for r in g["contacts"]]}
+                                        for g in groups]})
         results = []
         for g in groups:
             results.extend(contact_dedup.clean_group(db, c, t, g))
