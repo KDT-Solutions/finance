@@ -401,6 +401,36 @@ def payments_download(code: str, name: str, db: Session = Depends(get_db), sess:
     return FileResponse(path, media_type="application/xml", filename=name)
 
 
+def _replace(db: Session, booking_id: int, sess: dict, remove: bool) -> RedirectResponse:
+    b = db.get(Booking, booking_id)
+    if not b:
+        raise HTTPException(404)
+    code = db.get(Tenant, b.tenant_id).code
+    z = _zammad()
+    try:
+        res = payments.replace_file(db, z, b, actor=sess["u"], remove=remove)
+    except ValueError as e:
+        return RedirectResponse(f"/payments?tenant={code}&err={e}", status_code=303)
+    finally:
+        if z:
+            z.close()
+    if res["new"]:
+        msg = f"{res['old']} gesperrt, neues Zahlfile {res['new']} mit {len(res['kept'])} Zahlungen, unten herunterladen"
+    else:
+        msg = f"{res['old']} gesperrt, keine Zahlung mehr übrig"
+    return RedirectResponse(f"/payments?tenant={code}&msg={msg}", status_code=303)
+
+
+@router.post("/payments/replace/{booking_id}")
+def payments_replace(booking_id: int, db: Session = Depends(get_db), sess: dict = Depends(auth.require_csrf)):
+    return _replace(db, booking_id, sess, remove=False)
+
+
+@router.post("/payments/remove/{booking_id}")
+def payments_remove(booking_id: int, db: Session = Depends(get_db), sess: dict = Depends(auth.require_csrf)):
+    return _replace(db, booking_id, sess, remove=True)
+
+
 @router.post("/payments/unmark/{booking_id}")
 def payments_unmark(booking_id: int, db: Session = Depends(get_db), sess: dict = Depends(auth.require_csrf)):
     b = db.get(Booking, booking_id)

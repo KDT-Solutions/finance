@@ -849,6 +849,38 @@ def t_unmark_payment(db, a):
     return {"ok": True, "released_bookings": released}
 
 
+@tool("replace_payment_file", "Zahlfile einer Rechnung neu erzeugen (nur wenn das alte nicht hochgeladen wurde): neues File mit den aktuellen Daten, altes gesperrt. "
+      "remove=true nimmt diese Rechnung heraus (ihr Ticket geht wieder auf offen), die übrigen kommen ins neue File. "
+      "Verweigert, wenn eine Rechnung des Files in bexio bezahlt ist oder eine verbleibende Zahlung nicht zahlbar ist.",
+      {"booking_id": {"type": "integer"}, "remove": {"type": "boolean", "default": False},
+       "execution_date": {"type": "string", "description": "YYYY-MM-DD, Standard heute"}, "confirm": CONFIRM}, ["booking_id"])
+def t_replace_payment_file(db, a):
+    from datetime import datetime as _dt
+
+    b = db.get(Booking, int(a["booking_id"]))
+    if not b or not b.payment_file:
+        raise ToolError("Buchung nicht gefunden oder in keinem Zahlfile")
+    remove = bool(a.get("remove"))
+    exec_date = _dt.strptime(a["execution_date"], "%Y-%m-%d").date() if a.get("execution_date") else None
+    if not a.get("confirm"):
+        same = db.query(Booking).filter(Booking.tenant_id == b.tenant_id, Booking.payment_file == b.payment_file).all()
+        keep = [x.id for x in same if not (remove and x.id == b.id)]
+        return _preview(f"Zahlfile {b.payment_file} sperren und neu erzeugen" + (f" ohne Buchung {b.id}" if remove else "")
+                        + ". Nur wenn das alte nicht hochgeladen wurde, sonst wird doppelt bezahlt.", {"kept_bookings": keep, "removed_booking": b.id if remove else None})
+    z = _zammad()
+    try:
+        res = payments.replace_file(db, z, b, actor=ACTOR, remove=remove, execution_date=exec_date)
+    except ValueError as e:
+        raise ToolError(str(e))
+    finally:
+        if z:
+            z.close()
+    t = db.get(Tenant, b.tenant_id)
+    if res["new"]:
+        res["download"] = f"{get_settings().public_base_url}/payments/files/{t.code}/{res['new']}"
+    return {"ok": True, **res}
+
+
 # --- JSON-RPC transport ---------------------------------------------------------------
 def _authorized(request: Request) -> bool:
     token = get_settings().mcp_token

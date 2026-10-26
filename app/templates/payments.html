@@ -48,7 +48,11 @@
   <td class="r" data-label="Betrag">{{ r.currency }} {{ '%.2f'|format(r.amount or 0) }}</td>
   <td class="muted" data-label="Zahlfile">{{ r.payment_file }} · {{ r.payment_file_at.strftime('%d.%m.%y %H:%M') if r.payment_file_at }}</td>
   <td data-label="Ticket">{% if r.ticket %}#{{ r.ticket }}{% endif %}</td>
-  <td class="actions-cell"><form method="post" action="/payments/unmark/{{ r.booking_id }}" class="inline" data-confirm="Zahlfile {{ r.payment_file }} zurückziehen? Alle Zahlungen darin werden wieder offen und das File wird gesperrt. Nur wenn es nicht hochgeladen wurde, sonst wird doppelt bezahlt."><input type="hidden" name="csrf" value="{{ sess.csrf }}"><button class="link">Zahlfile zurückziehen</button></form></td>
+  <td class="actions-cell">
+    <form method="post" action="/payments/replace/{{ r.booking_id }}" class="inline" data-confirm="Zahlfile {{ r.payment_file }} neu erzeugen? Es entsteht ein neues File mit denselben Zahlungen und den aktuellen Daten, das alte wird gesperrt. Nur wenn das alte nicht hochgeladen wurde, sonst wird doppelt bezahlt."><input type="hidden" name="csrf" value="{{ sess.csrf }}"><button class="link">Neu erzeugen</button></form>
+    <form method="post" action="/payments/remove/{{ r.booking_id }}" class="inline" data-confirm="Diese Rechnung aus {{ r.payment_file }} entfernen? Es entsteht ein neues File mit den übrigen Zahlungen, das alte wird gesperrt, die Rechnung ist wieder offen. Nur wenn das alte nicht hochgeladen wurde."><input type="hidden" name="csrf" value="{{ sess.csrf }}"><button class="link">Entfernen</button></form>
+    <form method="post" action="/payments/unmark/{{ r.booking_id }}" class="inline" data-confirm="Zahlfile {{ r.payment_file }} zurückziehen? Alle Zahlungen darin werden wieder offen und das File wird gesperrt, ohne neues File. Nur wenn es nicht hochgeladen wurde, sonst wird doppelt bezahlt."><input type="hidden" name="csrf" value="{{ sess.csrf }}"><button class="link">Zurückziehen</button></form>
+  </td>
 </tr>
 {% endfor %}
 </tbody></table>

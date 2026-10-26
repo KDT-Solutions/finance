@@ -143,36 +143,52 @@ def create_file(db: Session, z: ZammadClient | None, tenant: Tenant, booking_ids
     already = [r for r in rows if r["payment_file"]]
     if already:
         raise ValueError("Schon in einem Zahlfile: " + ", ".join(f"{r['supplier']} ({r['payment_file']})" for r in already))
+
+    def note(r: dict, name: str, execution_date: date) -> str:
+        return (f"finance: Zahlung im Zahlfile {name} enthalten ({r['currency']} {float(r['amount']):.2f}, "
+                f"Ausführung {execution_date.strftime('%d.%m.%Y')}). Abschluss, sobald die Rechnung in bexio als bezahlt abgeglichen ist.")
+
+    name, data = _write_and_mark(db, z, tenant, rows, execution_date, note)
+    audit.log(db, "payment_file.created", tenant_id=tenant.id, actor=actor, entity="payment_file", details={"file": name, "count": len(rows), "total": round(sum(float(r["amount"]) for r in rows), 2)})
+    db.commit()
+    return name, data, rows
+
+
+def _write_and_mark(db: Session, z: ZammadClient | None, tenant: Tenant, rows: list[dict], execution_date: date | None, note) -> tuple[str, bytes]:
+    """pain.001 für rows bauen und ablegen, Buchungen markieren, Tickets mit note(r, name, execution_date) auf Warten setzen.
+    Kein Commit."""
+    from zoneinfo import ZoneInfo
+
     payments = [pain001.Payment(end_to_end_id=f"FIN-{tenant.code}-{r['booking_id']}", amount=float(r["amount"]), currency=r["currency"],
                                 creditor_name=r["creditor_name"], iban=r["iban"], reference_type=r["reference_type"], reference=r["reference"],
                                 message=r["message"], country=r["country"], street=r["street"], postcode=r["postcode"], town=r["town"])
                 for r in rows]
-    from zoneinfo import ZoneInfo
-
     created = now().astimezone(ZoneInfo(get_settings().tz))
     execution_date = pain001.next_bank_day(execution_date or created.date())
     if execution_date < created.date():
         raise ValueError("Ausführungsdatum liegt in der Vergangenheit")
-    msg_id = f"FIN{tenant.code}{created.strftime('%Y%m%d%H%M%S')}"
+    folder = _folder(tenant)
+    os.makedirs(folder, exist_ok=True)
+    base = f"FIN{tenant.code}{created.strftime('%Y%m%d%H%M%S')}"
+    msg_id, n = base, 1
+    while os.path.exists(os.path.join(folder, f"{msg_id}.xml")) or os.path.exists(os.path.join(folder, f"{msg_id}.xml{VOID_SUFFIX}")):
+        n += 1
+        msg_id = f"{base}{n}"  # same second (e.g. replace right after create): MsgId must stay unique
+    name = f"{msg_id}.xml"
+    path = os.path.join(folder, name)
     data = pain001.build(debtor_name=tenant.payment_name or tenant.name, debtor_iban=tenant.payment_iban, payments=payments,
                          execution_date=execution_date, msg_id=msg_id, created=created)
-    name = f"{msg_id}.xml"
-    folder = os.path.join(get_settings().data_dir, "payments", tenant.code)
-    os.makedirs(folder, exist_ok=True)
-    with open(os.path.join(folder, name), "wb") as f:
+    with open(path, "wb") as f:
         f.write(data)
     for r in rows:
         b = db.get(Booking, r["booking_id"])
         b.payment_file, b.payment_file_at = name, created
         if z and b.document.zammad_ticket_id:
             try:
-                set_waiting(db, z, b, f"finance: Zahlung im Zahlfile {name} enthalten ({r['currency']} {float(r['amount']):.2f}, "
-                                      f"Ausführung {execution_date.strftime('%d.%m.%Y')}). Abschluss, sobald die Rechnung in bexio als bezahlt abgeglichen ist.")
+                set_waiting(db, z, b, note(r, name, execution_date))
             except Exception:  # noqa: BLE001
                 log.exception("zammad wait failed for %s", b.document.zammad_ticket_id)
-    audit.log(db, "payment_file.created", tenant_id=tenant.id, actor=actor, entity="payment_file", details={"file": name, "count": len(rows), "total": round(sum(float(r["amount"]) for r in rows), 2)})
-    db.commit()
-    return name, data, rows
+    return name, data
 
 
 VOID_SUFFIX = ".void"
@@ -284,3 +300,58 @@ def unmark(db: Session, z: ZammadClient | None, booking: Booking, actor: str) ->
         except Exception:  # noqa: BLE001
             log.exception("zammad feedback after unmark failed for %s", tid)
     return [b.id for b in group]
+
+
+def replace_file(db: Session, z: ZammadClient | None, booking: Booking, actor: str, *, remove: bool = False,
+                 execution_date: date | None = None) -> dict:
+    """Zahlfile der Buchung ersetzen: neues File mit den aktuellen Daten erzeugen, altes sperren.
+    remove=False: alle Zahlungen kommen ins neue File (z.B. nach korrigierter Adresse).
+    remove=True: die Zahlung dieser Buchung fällt weg, ihr Ticket geht wieder auf offen; die übrigen kommen ins neue File.
+    Verweigert, wenn eine Rechnung des alten Files in bexio bezahlt ist oder eine verbleibende Zahlung nicht zahlbar ist.
+    Gibt {"old", "new", "kept", "removed"} zurück (new ist None, wenn nichts übrig bleibt)."""
+    if not booking.payment_file:
+        raise ValueError("Buchung ist in keinem Zahlfile")
+    old = booking.payment_file
+    tenant = booking.tenant or db.get(Tenant, booking.tenant_id)
+    if not tenant.payment_iban:
+        raise ValueError(f"{tenant.code}: keine Zahl-IBAN in den Einstellungen (payment_iban)")
+    if not file_path(tenant, old):
+        raise ValueError(f"Zahlfile {old} nicht gefunden oder schon gesperrt")
+    group = db.query(Booking).filter(Booking.tenant_id == booking.tenant_id, Booking.payment_file == old).order_by(Booking.id).all()
+    paid = [b for b in group if _bill_paid(db, b)]
+    if paid:
+        db.commit()
+        raise ValueError("Rechnung in bexio bereits bezahlt (Buchung " + ", ".join(str(b.id) for b in paid) + "), Zahlfile bleibt")
+    keep_ids = {b.id for b in group if not (remove and b.id == booking.id)}
+    if not keep_ids:
+        released = unmark(db, z, booking, actor)
+        return {"old": old, "new": None, "kept": [], "removed": released}
+    rows = [r for r in open_bills(db, tenant, include_in_file=True) if r["booking_id"] in keep_ids]
+    bad = [f"{r['supplier']} ({', '.join(r['problems'])})" for r in rows if r["problems"]]
+    if bad:
+        raise ValueError("Nicht zahlbar: " + "; ".join(bad) + ". Zahlfile bleibt unverändert")
+
+    def note(r: dict, name: str, execution_date: date) -> str:
+        return (f"finance: Zahlfile {old} gesperrt und ersetzt durch {name} ({r['currency']} {float(r['amount']):.2f}, "
+                f"Ausführung {execution_date.strftime('%d.%m.%Y')}). Nur {name} verwenden.")
+
+    name, _data = _write_and_mark(db, z, tenant, rows, execution_date, note)
+    removed = [b for b in group if b.id not in keep_ids]
+    for b in removed:
+        audit.log(db, "payment_file.unmarked", tenant_id=b.tenant_id, actor=actor, entity="booking", entity_id=b.id, details={"file": old})
+        b.payment_file, b.payment_file_at, b.ticket_wait_until = None, None, None
+    void_file(db, tenant, old, actor)
+    audit.log(db, "payment_file.replaced", tenant_id=tenant.id, actor=actor, entity="payment_file",
+              details={"old": old, "new": name, "kept": sorted(keep_ids), "removed": [b.id for b in removed]})
+    db.commit()
+    for b in removed:
+        tid = b.document.zammad_ticket_id if b.document else None
+        if not (z and tid):
+            continue
+        try:
+            z.add_note(tid, f"finance: Rechnung aus Zahlfile {old} entfernt, das File ist gesperrt (ersetzt durch {name} ohne diese Rechnung). "
+                            "Rechnung ist wieder offen.")
+            z.set_state(tid, "open")
+        except Exception:  # noqa: BLE001
+            log.exception("zammad feedback after remove failed for %s", tid)
+    return {"old": old, "new": name, "kept": sorted(keep_ids), "removed": [b.id for b in removed]}

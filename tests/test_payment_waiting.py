@@ -276,3 +276,83 @@ def test_file_path_rejects_void_and_traversal(env, tmp_path):
     assert payments.file_path(t["AAA"], "X.xml.void") is None
     assert payments.file_path(t["AAA"], "X.xml") is None
     assert payments.file_path(t["AAA"], "../BBB/X.xml") is None
+
+
+# --- Zahlfile neu erzeugen / Rechnung entfernen ----------------------------------------------
+def _file_with_two(env, monkeypatch, t1, t2):
+    db, z, t = env
+    _payable(monkeypatch)
+    b1 = _bill(db, t["AAA"], t1, f"bill-{t1}")
+    b2 = _bill(db, t["AAA"], t2, f"bill-{t2}")
+    name, _data, _rows = payments.create_file(db, z, t["AAA"], [b1.id, b2.id], None, actor="test")
+    return db, z, t, b1, b2, name
+
+
+def test_replace_file_keeps_all_payments_with_new_file(env, monkeypatch):
+    db, z, t, b1, b2, old = _file_with_two(env, monkeypatch, 301, 302)
+    res = payments.replace_file(db, z, b1, actor="test")
+    new = res["new"]
+    assert new and new != old and sorted(res["kept"]) == sorted([b1.id, b2.id]) and res["removed"] == []
+    assert b1.payment_file == new and b2.payment_file == new
+    assert payments.file_path(t["AAA"], old) is None
+    assert payments.file_path(t["AAA"], new)
+    for tid in (301, 302):
+        assert z.ticket_state(tid)[0] == PENDING_REMINDER
+        assert f"ersetzt durch {new}" in z.notes_for(tid)[-1]
+    xml = open(payments.file_path(t["AAA"], new), "rb").read()
+    assert b"FIN-AAA-%d" % b1.id in xml and b"FIN-AAA-%d" % b2.id in xml
+
+
+def test_replace_file_uses_current_payment_data(env, monkeypatch):
+    db, z, t, b1, b2, old = _file_with_two(env, monkeypatch, 303, 304)
+    base = payments.payment_info(None)
+    monkeypatch.setattr(payments, "payment_info", lambda doc: {**base, "town": "Basel", "postcode": "4000"})
+    res = payments.replace_file(db, z, b1, actor="test")
+    xml = open(payments.file_path(t["AAA"], res["new"]), "rb").read()
+    assert b"Basel" in xml and b"Z\xc3\xbcrich" not in xml
+
+
+def test_remove_one_payment_from_file(env, monkeypatch):
+    db, z, t, b1, b2, old = _file_with_two(env, monkeypatch, 305, 306)
+    res = payments.replace_file(db, z, b1, actor="test", remove=True)
+    new = res["new"]
+    assert res["kept"] == [b2.id] and res["removed"] == [b1.id]
+    assert b1.payment_file is None and b1.ticket_wait_until is None
+    assert b2.payment_file == new
+    assert payments.file_path(t["AAA"], old) is None
+    assert z.ticket_state(305) == ("open", None) and "entfernt" in z.notes_for(305)[-1]
+    assert z.ticket_state(306)[0] == PENDING_REMINDER
+    xml = open(payments.file_path(t["AAA"], new), "rb").read()
+    assert b"FIN-AAA-%d<" % b2.id in xml and b"FIN-AAA-%d<" % b1.id not in xml
+    assert [r["booking_id"] for r in payments.open_bills(db, t["AAA"])] == [b1.id]
+
+
+def test_remove_last_payment_just_withdraws(env, monkeypatch):
+    db, z, t = env
+    _payable(monkeypatch)
+    b = _bill(db, t["AAA"], 307, "bill-307")
+    old, _d, _r = payments.create_file(db, z, t["AAA"], [b.id], None, actor="test")
+    res = payments.replace_file(db, z, b, actor="test", remove=True)
+    assert res["new"] is None and res["removed"] == [b.id]
+    assert payments.file_path(t["AAA"], old) is None
+    assert z.ticket_state(307) == ("open", None)
+
+
+def test_replace_refused_when_paid(env, monkeypatch):
+    db, z, t, b1, b2, old = _file_with_two(env, monkeypatch, 308, 309)
+    FakeBexio.status["bill-309"] = "paid"
+    with pytest.raises(ValueError, match="bereits bezahlt"):
+        payments.replace_file(db, z, b1, actor="test")
+    assert b1.payment_file == old and payments.file_path(t["AAA"], old)
+    assert len(payments.list_files(t["AAA"])) == 1
+
+
+def test_replace_refused_when_remaining_payment_not_payable(env, monkeypatch):
+    db, z, t, b1, b2, old = _file_with_two(env, monkeypatch, 310, 311)
+    base = payments.payment_info(None)
+    monkeypatch.setattr(payments, "payment_info", lambda doc: {**base, "problems": ["keine IBAN"]})
+    with pytest.raises(ValueError, match="Nicht zahlbar"):
+        payments.replace_file(db, z, b1, actor="test")
+    assert b1.payment_file == old and b2.payment_file == old
+    assert payments.file_path(t["AAA"], old)
+    assert len(payments.list_files(t["AAA"])) == 1
