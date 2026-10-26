@@ -48,6 +48,17 @@ def _kv_set(db: Session, key: str, value: str) -> None:
 
 
 # --- ingest -----------------------------------------------------------------------------
+def invoices_over_receipts(atts: list) -> list:
+    """Stripe mails carry Invoice-*.pdf and Receipt-*.pdf for the same payment: within one article,
+    drop the receipts when an invoice is attached. A receipt on its own is kept."""
+    def kind(a) -> str:
+        name = (a.filename or "").lower()
+        return "invoice" if name.startswith("invoice") else "receipt" if name.startswith("receipt") else ""
+
+    with_invoice = {a.article_id for a in atts if kind(a) == "invoice"}
+    return [a for a in atts if not (kind(a) == "receipt" and a.article_id in with_invoice)]
+
+
 def ingest_tenant(db: Session, z: ZammadClient, tenant: Tenant) -> int:
     """Pull new PDF attachments from the tenant's Finance groups. Returns number of new documents."""
     s = get_settings()
@@ -65,7 +76,7 @@ def ingest_tenant(db: Session, z: ZammadClient, tenant: Tenant) -> int:
             if _kv_get(db, key) == stamp:
                 continue
             try:
-                atts = z.pdf_attachments(tid)
+                atts = invoices_over_receipts(z.pdf_attachments(tid))
                 for att in atts:
                     if att.size and att.size > s.max_pdf_bytes:
                         log.warning("attachment too large: ticket %s %s", tid, att.filename)
