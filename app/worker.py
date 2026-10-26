@@ -64,6 +64,15 @@ def tick() -> None:
 def main() -> None:
     init_db()
     s = get_settings()
+    try:
+        from .services import payments
+
+        with SessionLocal() as db:
+            voided = payments.void_withdrawn_files(db)
+        if voided:
+            log.info("zurückgezogene Zahlfiles gesperrt: %s", ", ".join(voided))
+    except Exception:  # noqa: BLE001
+        log.exception("void_withdrawn_files failed")
     log.info("worker gestartet, Intervall %ss", s.worker_interval_seconds)
     while True:
         try:

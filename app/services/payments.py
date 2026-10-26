@@ -175,23 +175,64 @@ def create_file(db: Session, z: ZammadClient | None, tenant: Tenant, booking_ids
     return name, data, rows
 
 
+VOID_SUFFIX = ".void"
+
+
+def _folder(tenant: Tenant) -> str:
+    return os.path.join(get_settings().data_dir, "payments", tenant.code)
+
+
 def list_files(tenant: Tenant) -> list[dict]:
-    folder = os.path.join(get_settings().data_dir, "payments", tenant.code)
+    """Erstellte Zahlfiles, neueste zuerst. Zurückgezogene Files (Endung .void) mit void=True, ohne Download."""
+    folder = _folder(tenant)
     if not os.path.isdir(folder):
         return []
     out = []
-    for n in sorted(os.listdir(folder), reverse=True):
-        if n.endswith(".xml"):
+    for n in os.listdir(folder):
+        void = n.endswith(".xml" + VOID_SUFFIX)
+        if n.endswith(".xml") or void:
             st = os.stat(os.path.join(folder, n))
-            out.append({"name": n, "size": st.st_size, "at": datetime.fromtimestamp(st.st_mtime)})
+            out.append({"name": n[: -len(VOID_SUFFIX)] if void else n, "void": void, "size": st.st_size, "at": datetime.fromtimestamp(st.st_mtime)})
+    out.sort(key=lambda f: f["name"], reverse=True)
     return out[:50]
 
 
 def file_path(tenant: Tenant, name: str) -> str | None:
-    if not name.endswith(".xml") or "/" in name or ".." in name:
+    """Pfad eines gültigen Zahlfiles; zurückgezogene Files (.void) werden nicht ausgeliefert."""
+    if not name.endswith(".xml") or "/" in name or "\\" in name or ".." in name:
         return None
-    path = os.path.join(get_settings().data_dir, "payments", tenant.code, name)
+    path = os.path.join(_folder(tenant), name)
     return path if os.path.isfile(path) else None
+
+
+def void_file(db: Session, tenant: Tenant, name: str, actor: str) -> bool:
+    """Zahlfile sperren (umbenennen auf .void): nicht mehr herunterladbar, bleibt als Nachweis liegen."""
+    path = file_path(tenant, name)
+    if not path:
+        return False
+    os.replace(path, path + VOID_SUFFIX)
+    audit.log(db, "payment_file.voided", tenant_id=tenant.id, actor=actor, entity="payment_file", details={"file": name})
+    return True
+
+
+def void_withdrawn_files(db: Session) -> list[str]:
+    """Einmalig/idempotent: Zahlfiles sperren, aus denen eine Zahlung abgemeldet wurde und auf die keine Buchung
+    mehr zeigt (Altfälle aus der Zeit vor der Sperre)."""
+    from ..models import AuditLog
+
+    done = []
+    rows = db.query(AuditLog).filter(AuditLog.action == "payment_file.unmarked").all()
+    for row in rows:
+        name = (row.details or {}).get("file")
+        tenant = db.get(Tenant, row.tenant_id) if row.tenant_id else None
+        if not name or not tenant:
+            continue
+        if db.query(Booking).filter(Booking.tenant_id == tenant.id, Booking.payment_file == name).count():
+            continue
+        if void_file(db, tenant, name, actor="system"):
+            done.append(f"{tenant.code}/{name}")
+    db.commit()
+    return done
 
 
 def _bill_paid(db: Session, booking: Booking) -> bool:
@@ -213,23 +254,33 @@ def _bill_paid(db: Session, booking: Booking) -> bool:
     return status == "paid"
 
 
-def unmark(db: Session, z: ZammadClient | None, booking: Booking, actor: str) -> None:
-    """Remove a booking from its payment file bookkeeping (file was not uploaded), so it can be included again.
-    Refused when the bill is already paid. The ticket gets a note (the old file must not be used) and is opened again."""
+def unmark(db: Session, z: ZammadClient | None, booking: Booking, actor: str) -> list[int]:
+    """Zahlfile zurückziehen (es wurde nicht hochgeladen): alle Zahlungen dieses Files werden freigegeben und das
+    File gesperrt, damit es nicht mehr hochgeladen werden kann. Verweigert, wenn eine Rechnung des Files schon bezahlt
+    ist oder bexio den Status nicht liefert. Jedes Ticket bekommt eine Notiz und wird wieder geöffnet.
+    Gibt die IDs der freigegebenen Buchungen zurück."""
     if not booking.payment_file:
         raise ValueError("Buchung ist in keinem Zahlfile")
-    if _bill_paid(db, booking):
-        db.commit()
-        raise ValueError("Rechnung ist in bexio bereits bezahlt, Markierung bleibt")
     old = booking.payment_file
-    audit.log(db, "payment_file.unmarked", tenant_id=booking.tenant_id, actor=actor, entity="booking", entity_id=booking.id, details={"file": old})
-    booking.payment_file, booking.payment_file_at, booking.ticket_wait_until = None, None, None
+    tenant = booking.tenant or db.get(Tenant, booking.tenant_id)
+    group = db.query(Booking).filter(Booking.tenant_id == booking.tenant_id, Booking.payment_file == old).order_by(Booking.id).all()
+    paid = [b for b in group if _bill_paid(db, b)]
+    if paid:
+        db.commit()
+        raise ValueError("Rechnung in bexio bereits bezahlt (Buchung " + ", ".join(str(b.id) for b in paid) + "), Zahlfile bleibt")
+    for b in group:
+        audit.log(db, "payment_file.unmarked", tenant_id=b.tenant_id, actor=actor, entity="booking", entity_id=b.id, details={"file": old})
+        b.payment_file, b.payment_file_at, b.ticket_wait_until = None, None, None
+    void_file(db, tenant, old, actor)
     db.commit()
-    tid = booking.document.zammad_ticket_id if booking.document else None
-    if z and tid:
+    for b in group:
+        tid = b.document.zammad_ticket_id if b.document else None
+        if not (z and tid):
+            continue
         try:
-            z.add_note(tid, f"finance: Zahlung aus Zahlfile {old} zurückgezogen, dieses Zahlfile nicht verwenden. "
+            z.add_note(tid, f"finance: Zahlfile {old} zurückgezogen und gesperrt, nicht verwenden. "
                             "Rechnung ist wieder offen und kommt ins nächste Zahlfile.")
             z.set_state(tid, "open")
         except Exception:  # noqa: BLE001
             log.exception("zammad feedback after unmark failed for %s", tid)
+    return [b.id for b in group]

@@ -409,13 +409,13 @@ def payments_unmark(booking_id: int, db: Session = Depends(get_db), sess: dict =
     code = db.get(Tenant, b.tenant_id).code
     z = _zammad()
     try:
-        payments.unmark(db, z, b, actor=sess["u"])
+        payments.unmark(db, z, b, actor=sess["u"])  # releases every payment of that file
     except ValueError as e:
         return RedirectResponse(f"/payments?tenant={code}&err={e}", status_code=303)
     finally:
         if z:
             z.close()
-    return RedirectResponse(f"/payments?tenant={code}&msg=Markierung entfernt, Ticket wieder offen", status_code=303)
+    return RedirectResponse(f"/payments?tenant={code}&msg=Zahlfile zurückgezogen und gesperrt, Rechnungen wieder offen", status_code=303)
 
 
 @router.get("/rules", response_class=HTMLResponse)

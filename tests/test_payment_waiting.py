@@ -214,3 +214,65 @@ def test_unmark_refused_when_bexio_unreachable(env, monkeypatch):
     with pytest.raises(ValueError, match="nicht prüfbar"):
         payments.unmark(db, z, b, actor="test")
     assert b.payment_file == "F1.xml"
+
+
+# --- Zahlfile zurückziehen und sperren -------------------------------------------------------
+def test_unmark_voids_file_and_releases_all_payments(env, monkeypatch):
+    db, z, t = env
+    _payable(monkeypatch)
+    b1 = _bill(db, t["AAA"], 201, "bill-21")
+    b2 = _bill(db, t["AAA"], 202, "bill-22")
+    name, _data, _rows = payments.create_file(db, z, t["AAA"], [b1.id, b2.id], None, actor="test")
+    assert payments.file_path(t["AAA"], name)
+    released = payments.unmark(db, z, b1, actor="test")
+    assert sorted(released) == sorted([b1.id, b2.id])
+    assert b1.payment_file is None and b2.payment_file is None
+    assert payments.file_path(t["AAA"], name) is None
+    files = payments.list_files(t["AAA"])
+    assert [(f["name"], f["void"]) for f in files] == [(name, True)]
+    for tid in (201, 202):
+        assert z.ticket_state(tid) == ("open", None)
+        assert "gesperrt" in z.notes_for(tid)[-1]
+    # beide Rechnungen sind wieder zahlbar
+    assert {r["booking_id"] for r in payments.open_bills(db, t["AAA"])} == {b1.id, b2.id}
+
+
+def test_unmark_refused_if_any_payment_of_file_paid(env, monkeypatch):
+    db, z, t = env
+    _payable(monkeypatch)
+    b1 = _bill(db, t["AAA"], 203, "bill-23")
+    b2 = _bill(db, t["AAA"], 204, "bill-24")
+    name, _data, _rows = payments.create_file(db, z, t["AAA"], [b1.id, b2.id], None, actor="test")
+    FakeBexio.status["bill-24"] = "paid"
+    with pytest.raises(ValueError, match="bereits bezahlt"):
+        payments.unmark(db, z, b1, actor="test")
+    assert b1.payment_file == name and b2.payment_file == name
+    assert payments.file_path(t["AAA"], name)
+
+
+def test_void_withdrawn_files_for_old_cases(env, tmp_path):
+    from app.models import AuditLog
+
+    db, z, t = env
+    folder = tmp_path / "payments" / "AAA"
+    folder.mkdir(parents=True)
+    for n in ("FINAAA1.xml", "FINAAA2.xml", "FINAAA3.xml"):
+        (folder / n).write_bytes(b"<xml/>")
+    db.add(AuditLog(tenant_id=t["AAA"].id, actor="test", action="payment_file.unmarked", details={"file": "FINAAA1.xml"}))
+    db.add(AuditLog(tenant_id=t["AAA"].id, actor="test", action="payment_file.unmarked", details={"file": "FINAAA2.xml"}))
+    _bill(db, t["AAA"], 205, "bill-25", payment_file="FINAAA2.xml")  # wieder in Gebrauch: nicht sperren
+    db.commit()
+    assert payments.void_withdrawn_files(db) == ["AAA/FINAAA1.xml"]
+    assert payments.file_path(t["AAA"], "FINAAA1.xml") is None
+    assert payments.file_path(t["AAA"], "FINAAA2.xml") and payments.file_path(t["AAA"], "FINAAA3.xml")
+    assert payments.void_withdrawn_files(db) == []  # idempotent
+
+
+def test_file_path_rejects_void_and_traversal(env, tmp_path):
+    db, z, t = env
+    folder = tmp_path / "payments" / "AAA"
+    folder.mkdir(parents=True)
+    (folder / "X.xml.void").write_bytes(b"<xml/>")
+    assert payments.file_path(t["AAA"], "X.xml.void") is None
+    assert payments.file_path(t["AAA"], "X.xml") is None
+    assert payments.file_path(t["AAA"], "../BBB/X.xml") is None

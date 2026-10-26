@@ -827,24 +827,26 @@ def t_create_payment_file(db, a):
             "download": f"{get_settings().public_base_url}/payments/files/{t.code}/{name}", "payments": [{k: r[k] for k in ("supplier", "amount", "currency", "document_number")} for r in used]}
 
 
-@tool("unmark_payment", "Rechnung aus der Zahlfile-Markierung lösen (nur wenn das Zahlfile nicht hochgeladen wurde). Wird verweigert, wenn die Rechnung in bexio bezahlt ist; "
-      "das Ticket bekommt eine Notiz und wird wieder geöffnet.",
+@tool("unmark_payment", "Zahlfile einer Rechnung zurückziehen (nur wenn es nicht hochgeladen wurde): alle Zahlungen des Files werden wieder offen, das File wird gesperrt "
+      "(kein Download mehr), die Tickets bekommen eine Notiz und werden geöffnet. Verweigert, wenn eine Rechnung des Files in bexio bezahlt ist.",
       {"booking_id": {"type": "integer"}, "confirm": CONFIRM}, ["booking_id"])
 def t_unmark_payment(db, a):
     b = db.get(Booking, int(a["booking_id"]))
     if not b:
         raise ToolError("Buchung nicht gefunden")
     if not a.get("confirm"):
-        return _preview(f"Markierung {b.payment_file} von Buchung {b.id} entfernen. Nur wenn das Zahlfile nicht hochgeladen wurde, sonst wird doppelt bezahlt.", {})
+        same = db.query(Booking).filter(Booking.tenant_id == b.tenant_id, Booking.payment_file == b.payment_file).all() if b.payment_file else []
+        return _preview(f"Zahlfile {b.payment_file} zurückziehen und sperren. Nur wenn es nicht hochgeladen wurde, sonst wird doppelt bezahlt.",
+                        {"bookings": [x.id for x in same]})
     z = _zammad()
     try:
-        payments.unmark(db, z, b, actor=ACTOR)
+        released = payments.unmark(db, z, b, actor=ACTOR)
     except ValueError as e:
         raise ToolError(str(e))
     finally:
         if z:
             z.close()
-    return {"ok": True}
+    return {"ok": True, "released_bookings": released}
 
 
 # --- JSON-RPC transport ---------------------------------------------------------------

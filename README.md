@@ -19,8 +19,9 @@ in Zammad tickets, the tool reads them, decides how to book them and writes to b
    invoices are closed once bexio reports the bill as paid. An invoice put into a payment
    file sets its ticket to "pending reminder" for 14 days (`PAYMENT_WAIT_DAYS`, 09:00 local);
    the paid check closes it once bexio reports the bill as paid, otherwise it waits another
-   14 days after the reminder is due. Removing an invoice from a payment file is refused for
-   paid bills, notes the withdrawn file in the ticket and opens the ticket again.
+   14 days after the reminder is due. Withdrawing a payment file (it was not uploaded) is refused
+   when a bill in it is paid; otherwise all its payments become open again, the tickets get
+   a note and are reopened, and the file is locked (renamed to `.void`, no download).
 
 ## Stack
 
