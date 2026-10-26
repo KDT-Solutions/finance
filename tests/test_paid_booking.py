@@ -1,0 +1,107 @@
+"""Bezahlter Beleg (card/private/bank_paid): manuelle Buchung gegen Zahlkonto.
+bexio und Zammad sind gemockt, nur Platzhalterdaten."""
+import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+from app.config import get_settings
+from app.db import Base
+from app.models import Document, PaymentAccount, Rule, Supplier, Tenant
+from app.services import actions, bexio as bx
+
+
+class FakeBexio:
+    entry_response: object = None
+    file_response: object = None
+    file_error: Exception | None = None
+    entries: list[dict] = []
+    files: list[tuple[int, int]] = []
+
+    def __init__(self, db, tenant):
+        self.tenant = tenant
+
+    def create_manual_entry(self, date, reference_nr, entries):
+        FakeBexio.entries.append({"date": date, "reference_nr": reference_nr, "entries": entries})
+        return FakeBexio.entry_response
+
+    def attach_file_to_entry(self, manual_entry_id, entry_id, filename, content):
+        FakeBexio.files.append((manual_entry_id, entry_id))
+        if FakeBexio.file_error:
+            raise FakeBexio.file_error
+        return FakeBexio.file_response
+
+    def close(self):
+        pass
+
+
+ENTRY = {"id": 1146, "type": "manual_single_entry", "date": "2026-10-26", "reference_nr": "R-1",
+         "entries": [{"id": 21921, "debit_account_id": 170, "credit_account_id": 99, "amount": 12.97}]}
+FILE = {"id": 5, "uuid": "11111111-2222-3333-4444-555555555555", "name": "beleg.pdf"}
+
+
+@pytest.fixture
+def env(monkeypatch, tmp_path):
+    eng = create_engine("sqlite://")
+    Base.metadata.create_all(eng)
+    db = sessionmaker(bind=eng, expire_on_commit=False)()
+    monkeypatch.setattr(get_settings(), "data_dir", str(tmp_path))
+    monkeypatch.setattr(bx, "BexioClient", FakeBexio)
+    FakeBexio.entry_response, FakeBexio.file_response, FakeBexio.file_error = ENTRY, [FILE], None
+    FakeBexio.entries, FakeBexio.files = [], []
+    t = Tenant(code="AAA", name="Beispiel AAA GmbH", zammad_group_paid="Finance AAA", zammad_group_topay="Finance toPay AAA",
+               master_data={"accounts": [{"id": 170, "no": "4200"}], "taxes": [{"id": 7, "code": "VIM"}]})
+    db.add(t)
+    db.flush()
+    pa = PaymentAccount(tenant_id=t.id, label="Visa", kind="card", bexio_account_id=99)
+    sup = Supplier(tenant_id=t.id, display_name="Lieferant AG", name_key="lieferant ag", bexio_contact_id=515, ibans=[], name_variants=[])
+    db.add_all([pa, sup])
+    db.flush()
+    pdf = tmp_path / "beleg.pdf"
+    pdf.write_bytes(b"%PDF-1.4")
+    doc = Document(tenant_id=t.id, sha256="sha1", filename="beleg.pdf", storage_path=str(pdf), size=8, state="needs_review", supplier_id=sup.id)
+    db.add(doc)
+    db.commit()
+    dec = {"payment_mode": "card", "payment_account_id": pa.id, "account_id": 170, "tax_id": 7, "amount": 12.97, "currency": "CHF",
+           "doc_date": "2026-10-26", "document_number": "R-1", "supplier_name": "Lieferant AG", "booking_text": "Lizenz"}
+    return db, doc, dec
+
+
+def test_card_booking_with_list_file_response(env):
+    db, doc, dec = env
+    out = actions.book_with_decision(db, None, doc, dec, remember=True, keywords=[], actor="test")
+    assert out["booked"] and doc.state == "booked" and doc.last_error is None
+    b = doc.booking
+    assert (b.kind, b.bexio_entry_id, b.bexio_file_id) == ("entry", 1146, FILE["uuid"])
+    assert FakeBexio.files == [(1146, 21921)]
+    line = FakeBexio.entries[0]["entries"][0]
+    assert (line["debit_account_id"], line["credit_account_id"], line["tax_id"]) == (170, 99, 7)
+    rule = db.get(Rule, out["rule_id"])
+    assert (rule.payment_mode, rule.tax_id, rule.account_id) == ("card", 7, 170)
+
+
+def test_card_booking_with_list_entry_response(env):
+    db, doc, dec = env
+    FakeBexio.entry_response, FakeBexio.file_response = [ENTRY], FILE
+    out = actions.book_with_decision(db, None, doc, dec, remember=False, keywords=[], actor="test")
+    assert out["booked"] and out["rule_id"] is None
+    assert (doc.booking.bexio_entry_id, doc.booking.bexio_file_id) == (1146, FILE["uuid"])
+
+
+def test_card_booking_survives_failed_attach(env):
+    """Die Buchung existiert in bexio, sobald create_manual_entry durch ist: ein Fehler beim Anhang darf sie nicht verlieren."""
+    db, doc, dec = env
+    FakeBexio.file_error = bx.BexioError(500, "boom", "files")
+    out = actions.book_with_decision(db, None, doc, dec, remember=False, keywords=[], actor="test")
+    assert out["booked"] and doc.booking.bexio_entry_id == 1146 and doc.booking.bexio_file_id is None
+
+
+def test_failed_booking_writes_no_rule(env, monkeypatch):
+    db, doc, dec = env
+
+    def fail(self, *a, **kw):
+        raise bx.BexioError(422, "invalid", "manual_entries")
+
+    monkeypatch.setattr(FakeBexio, "create_manual_entry", fail)
+    out = actions.book_with_decision(db, None, doc, dec, remember=True, keywords=[], actor="test")
+    assert out == {"booked": False, "rule_id": None}
+    assert doc.state == "error" and db.query(Rule).count() == 0

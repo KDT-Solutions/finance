@@ -194,6 +194,13 @@ def process_document(db: Session, z: ZammadClient | None, doc: Document) -> None
 
 
 # --- booking ------------------------------------------------------------------------------
+def _one(res) -> dict:
+    """bexio answers some POSTs with an object, others with a list of objects: first object or {}."""
+    if isinstance(res, list):
+        res = res[0] if res else None
+    return res if isinstance(res, dict) else {}
+
+
 def _master(tenant: Tenant, kind: str, id_: int | None) -> dict:
     for row in (tenant.master_data or {}).get(kind, []):
         if row.get("id") == id_:
@@ -334,16 +341,20 @@ def book(db: Session, z: ZammadClient | None, doc: Document, *, actor: str = "sy
                                                 tax_id=dec.get("tax_id"), tax_account_id=int(dec["account_id"]), description=f"{desc} {docno}".strip())
             payload = {"date": dec.get("doc_date") or now().date().isoformat(), "reference_nr": docno or doc.filename, "entries": lines}
             created = client.create_manual_entry(payload["date"], payload["reference_nr"], lines)
-            entry_id = created.get("id")
-            line_id = (created.get("entries") or [{}])[0].get("id")
+            # from here on the entry exists in bexio: nothing below may fail the booking, or it is lost locally
+            entry = _one(created)
+            entry_id = entry.get("id")
+            line_id = _one(entry.get("entries")).get("id")
             file_info = None
             if entry_id and line_id:
                 try:
+                    # bexio answers the file upload with a list of file objects
                     file_info = client.attach_file_to_entry(entry_id, line_id, doc.filename or "beleg.pdf", pdf)
-                except bx.BexioError as e:
-                    log.warning("file attach failed: %s", e)
+                except Exception as e:  # noqa: BLE001
+                    log.warning("file attach failed for entry %s: %s", entry_id, e)
             booking.kind, booking.bexio_entry_id, booking.payload, booking.response = "entry", entry_id, payload, {"entry": created, "file": file_info}
-            booking.bexio_file_id = str((file_info or {}).get("uuid") or (file_info or {}).get("id") or "") or None
+            f = _one(file_info)
+            booking.bexio_file_id = str(f.get("uuid") or f.get("id") or "") or None
             note = f"finance: Beleg gebucht (bezahlt).\nLieferant: {dec.get('supplier_name')}\nBetrag: {booking.currency} {amount:.2f}\nKonto: {_master(tenant, 'accounts', dec.get('account_id')).get('no', dec.get('account_id'))} an {pa.label}, Steuercode: {tax.get('code', dec.get('tax_id') or '-')}\nbexio Buchung-ID: {entry_id}"
             close_ticket = True
 
