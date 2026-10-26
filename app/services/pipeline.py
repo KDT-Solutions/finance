@@ -182,7 +182,17 @@ def process_document(db: Session, z: ZammadClient | None, doc: Document) -> None
             except Exception:  # noqa: BLE001
                 log.exception("could not move ticket %s", doc.zammad_ticket_id)
 
-        if decision.auto:
+        if decision.auto and decision.needs_chf:
+            doc.state = "needs_chf"
+            doc.review_reason = f"CHF-Betrag fehlt ({decision.currency} {decision.amount:.2f} bezahlt)"
+            if z and doc.zammad_ticket_id:
+                try:
+                    z.add_note(doc.zammad_ticket_id, f"finance: Beleg in {decision.currency}, wartet auf den CHF-Betrag laut Abrechnung.\n{s.public_base_url.rstrip('/')}/chf")
+                except Exception:  # noqa: BLE001
+                    log.exception("note failed")
+            audit.log(db, "document.needs_chf", tenant_id=tenant.id, entity="document", entity_id=doc.id,
+                      details={"currency": decision.currency, "amount": decision.amount})
+        elif decision.auto:
             book(db, z, doc, actor="system")
         else:
             doc.state = "needs_review"
@@ -348,9 +358,20 @@ def book(db: Session, z: ZammadClient | None, doc: Document, *, actor: str = "sy
             if not pa or not pa.bexio_account_id:
                 raise RuntimeError("Zahlkonto ohne bexio-Konto")
             tax = _master(tenant, "taxes", dec.get("tax_id"))
+            # paid in a foreign currency: the payment account was debited in CHF, book that amount
+            original = ""
+            if booking.currency.upper() != "CHF":
+                amount_chf = float(dec.get("amount_chf") or 0)
+                if amount_chf <= 0:
+                    raise RuntimeError(f"CHF-Betrag fehlt (bezahlt in {booking.currency})")
+                original = f"{booking.currency.upper()} {amount:.2f}"
+                booking.amount, booking.currency, amount = amount_chf, "CHF", amount_chf
             lines = bx.build_manual_entry_lines(amount=amount, debit_account_id=int(dec["account_id"]), credit_account_id=pa.bexio_account_id,
-                                                tax_id=dec.get("tax_id"), tax_account_id=int(dec["account_id"]), description=f"{desc} {docno}".strip())
+                                                tax_id=dec.get("tax_id"), tax_account_id=int(dec["account_id"]),
+                                                description=" ".join(x for x in (desc, docno, f"({original})" if original else "") if x))
             payload = {"date": dec.get("doc_date") or now().date().isoformat(), "reference_nr": docno or doc.filename, "entries": lines}
+            if original:
+                payload["original"] = original
             created = client.create_manual_entry(payload["date"], payload["reference_nr"], lines)
             # from here on the entry exists in bexio: nothing below may fail the booking, or it is lost locally
             entry = _one(created)
@@ -366,7 +387,7 @@ def book(db: Session, z: ZammadClient | None, doc: Document, *, actor: str = "sy
             booking.kind, booking.bexio_entry_id, booking.payload, booking.response = "entry", entry_id, payload, {"entry": created, "file": file_info}
             f = _one(file_info)
             booking.bexio_file_id = str(f.get("uuid") or f.get("id") or "") or None
-            note = f"finance: Beleg gebucht (bezahlt).\nLieferant: {dec.get('supplier_name')}\nBetrag: {booking.currency} {amount:.2f}\nKonto: {_master(tenant, 'accounts', dec.get('account_id')).get('no', dec.get('account_id'))} an {pa.label}, Steuercode: {tax.get('code', dec.get('tax_id') or '-')}\nbexio Buchung-ID: {entry_id}"
+            note = f"finance: Beleg gebucht (bezahlt).\nLieferant: {dec.get('supplier_name')}\nBetrag: {booking.currency} {amount:.2f}{f' ({original})' if original else ''}\nKonto: {_master(tenant, 'accounts', dec.get('account_id')).get('no', dec.get('account_id'))} an {pa.label}, Steuercode: {tax.get('code', dec.get('tax_id') or '-')}\nbexio Buchung-ID: {entry_id}"
             close_ticket = True
 
         db.add(booking)
@@ -555,7 +576,7 @@ def learn_from_history(db: Session, tenant: Tenant, months: int = 24) -> dict:
 def summary_text(db: Session) -> str:
     from sqlalchemy import func
 
-    rows = db.query(Tenant.code, func.count(Document.id)).join(Document).filter(Document.state == "needs_review").group_by(Tenant.code).all()
+    rows = db.query(Tenant.code, func.count(Document.id)).join(Document).filter(Document.state.in_(["needs_review", "needs_chf"])).group_by(Tenant.code).all()
     if not rows:
         return ""
     return ", ".join(f"{code}: {n}" for code, n in rows)

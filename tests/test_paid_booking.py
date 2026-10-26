@@ -105,3 +105,43 @@ def test_failed_booking_writes_no_rule(env, monkeypatch):
     out = actions.book_with_decision(db, None, doc, dec, remember=True, keywords=[], actor="test")
     assert out == {"booked": False, "rule_id": None}
     assert doc.state == "error" and db.query(Rule).count() == 0
+
+
+def test_foreign_card_booked_in_chf(env):
+    db, doc, dec = env
+    doc.state = "needs_chf"
+    doc.decision = {**dec, "currency": "USD", "amount": 49.75}
+    db.commit()
+    out = actions.book_chf(db, None, doc, 45.30, actor="test")
+    assert out["booked"] and doc.state == "booked"
+    line = FakeBexio.entries[0]["entries"][0]
+    assert line["amount"] == 45.30 and line["currency_id"] == 1
+    assert "(USD 49.75)" in line["description"]
+    assert (doc.booking.amount, doc.booking.currency) == (45.30, "CHF")
+    assert doc.decision["amount_chf"] == 45.30
+
+
+def test_foreign_card_without_chf_is_not_booked(env):
+    db, doc, dec = env
+    out = actions.book_with_decision(db, None, doc, {**dec, "currency": "USD"}, remember=False, keywords=[], actor="test")
+    assert not out["booked"] and doc.state == "error" and "CHF-Betrag fehlt" in doc.last_error
+    assert FakeBexio.entries == []
+
+
+def test_foreign_card_document_lands_in_needs_chf(env, monkeypatch):
+    from app.services import pipeline
+
+    db, doc, dec = env
+    sup = doc.supplier
+    db.add(Rule(tenant_id=doc.tenant_id, supplier_id=sup.id, keywords=[], account_id=170, tax_id=7, payment_mode="card",
+                payment_account_id=dec["payment_account_id"], auto_book=True))
+    db.commit()
+    llm = {"is_receipt": True, "document_type": "invoice", "supplier_name": "Lieferant AG", "document_number": "R-1", "document_date": "2026-10-26",
+           "currency": "USD", "total_gross": 49.75, "supplier_country": "US", "payment_status": "paid", "paid_hint": "Paid",
+           "confidence": {"total_gross": 0.99, "document_date": 0.99}}
+    monkeypatch.setattr(pipeline.extract, "extract", lambda pdf, ctx: (llm, "test"))
+    monkeypatch.setattr(pipeline.qrmod, "read_swiss_qr", lambda pdf: None)
+    monkeypatch.setattr(pipeline.qrmod, "extract_text", lambda pdf: "")
+    pipeline.process_document(db, None, doc)
+    assert doc.state == "needs_chf" and FakeBexio.entries == []
+    assert doc.review_reason == "CHF-Betrag fehlt (USD 49.75 bezahlt)"

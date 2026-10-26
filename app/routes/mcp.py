@@ -120,7 +120,7 @@ def _doc_dict(d: Document, full: bool = False) -> dict:
         "id": d.id, "tenant": d.tenant.code, "state": d.state, "received_at": d.received_at.isoformat() if d.received_at else None,
         "filename": d.filename, "ticket": d.zammad_ticket_number, "ticket_title": d.ticket_title, "zammad_group": d.zammad_group,
         "supplier": d.supplier.display_name if d.supplier else dec.get("supplier_name"),
-        "amount": dec.get("amount"), "currency": dec.get("currency"), "doc_date": dec.get("doc_date"), "due_date": dec.get("due_date"),
+        "amount": dec.get("amount"), "currency": dec.get("currency"), "amount_chf": dec.get("amount_chf"), "doc_date": dec.get("doc_date"), "due_date": dec.get("due_date"),
         "document_number": dec.get("document_number"), "payment_mode": dec.get("payment_mode"),
         "account_no": pipeline._master(d.tenant, "accounts", dec.get("account_id")).get("no"),
         "tax_code": pipeline._master(d.tenant, "taxes", dec.get("tax_id")).get("code"),
@@ -165,7 +165,7 @@ def t_version(db, a):
 def t_tenants(db, a):
     out = []
     for t in db.query(Tenant).order_by(Tenant.id).all():
-        n = db.query(Document).filter(Document.tenant_id == t.id, Document.state.in_(["needs_review", "error"])).count()
+        n = db.query(Document).filter(Document.tenant_id == t.id, Document.state.in_(["needs_review", "needs_chf", "error"])).count()
         out.append({"code": t.code, "name": t.name, "active": t.active, "bexio_connected": t.bexio_connected,
                     "bexio_company": t.bexio_company_name, "bexio_company_id": t.bexio_company_id, "master_data_at": t.master_data_at.isoformat() if t.master_data_at else None,
                     "open_todo": n})
@@ -279,14 +279,14 @@ def t_taxes(db, a):
     return (t.master_data or {}).get("taxes", [])
 
 
-@tool("list_todo", "Belege in Prüfung oder mit Fehler (Standard), oder nach Status gefiltert.",
-      {"tenant": TENANT, "state": {"type": "string", "description": "new | needs_review | error | booked | skipped | not_a_receipt | cancelled | extracted"},
+@tool("list_todo", "Belege in Prüfung, mit fehlendem CHF-Betrag oder mit Fehler (Standard), oder nach Status gefiltert.",
+      {"tenant": TENANT, "state": {"type": "string", "description": "new | needs_review | needs_chf | error | booked | skipped | not_a_receipt | cancelled | extracted"},
        "limit": {"type": "integer", "default": 50}})
 def t_todo(db, a):
     q = db.query(Document).join(Tenant)
     if a.get("tenant"):
         q = q.filter(Tenant.code == a["tenant"].upper())
-    q = q.filter(Document.state == a["state"]) if a.get("state") else q.filter(Document.state.in_(["needs_review", "error"]))
+    q = q.filter(Document.state == a["state"]) if a.get("state") else q.filter(Document.state.in_(["needs_review", "needs_chf", "error"]))
     return [_doc_dict(d) for d in q.order_by(Document.received_at.asc()).limit(int(a.get("limit") or 50)).all()]
 
 
@@ -300,10 +300,12 @@ def t_get_doc(db, a):
 
 @tool("book_document", "Beleg buchen: Felder überschreiben (Konto per Nummer, Steuer per Code, Zahlkonto per Label) und in bexio verbuchen. "
       "payment_mode open = offene Kreditorenrechnung, card/private/bank_paid = bezahlt (manuelle Buchung gegen Zahlkonto). "
+      "Bezahlt in Fremdwährung: amount_chf = belasteter CHF-Betrag laut Abrechnung, gebucht wird in CHF. "
       "remember=true merkt sich die Entscheidung als Regel für den Lieferanten.",
       {"id": {"type": "integer"}, "supplier_name": {"type": "string"}, "account_no": {"type": "string"}, "tax_code": {"type": "string"},
        "payment_mode": {"type": "string", "enum": ["open", "card", "private", "bank_paid"]}, "payment_account": {"type": "string"},
-       "booking_text": {"type": "string"}, "amount": {"type": "number"}, "currency": {"type": "string"}, "doc_date": {"type": "string"},
+       "booking_text": {"type": "string"}, "amount": {"type": "number"}, "currency": {"type": "string"},
+       "amount_chf": {"type": "number", "description": "nur bezahlt in Fremdwährung: belasteter Betrag in CHF laut Karten-/Bankabrechnung"}, "doc_date": {"type": "string"},
        "due_date": {"type": "string"}, "document_number": {"type": "string"}, "exchange_rate": {"type": "number", "description": "Kurs in CHF je Einheit Fremdwährung (optional, sonst BAZG-Tageskurs zum Belegdatum)"},
        "already_paid": {"type": "boolean", "default": False, "description": "offene Rechnung ist schon bezahlt: Ticket sofort schliessen, Ausgleich über Banksync (wird auch erkannt, wenn ein Agent 'bezahlt' ins Ticket geschrieben hat)"},
        "remember": {"type": "boolean", "default": False},
@@ -329,7 +331,7 @@ def t_book(db, a):
     if "payment_account" in a:
         pa = _payment_account(db, t, a["payment_account"])
         dec["payment_account_id"] = pa.id if pa else None
-    for k in ("booking_text", "amount", "currency", "doc_date", "due_date", "document_number", "exchange_rate", "already_paid"):
+    for k in ("booking_text", "amount", "currency", "amount_chf", "doc_date", "due_date", "document_number", "exchange_rate", "already_paid"):
         if k in a and a[k] is not None:
             dec[k] = a[k]
     dec["payment_mode"] = dec.get("payment_mode") or "open"
@@ -338,13 +340,15 @@ def t_book(db, a):
     missing = [k for k in ("account_id", "amount", "doc_date") if not dec.get(k)]
     if dec["payment_mode"] != "open" and not dec.get("payment_account_id"):
         missing.append("payment_account")
+    if actions.needs_chf(dec) and not dec.get("amount_chf"):
+        missing.append("amount_chf")
     if not dec.get("supplier_name") and not d.supplier:
         missing.append("supplier_name")
     summary = {
         "document": d.id, "tenant": t.code, "supplier": dec.get("supplier_name") or (d.supplier.display_name if d.supplier else None),
         "amount": dec.get("amount"), "currency": dec.get("currency", "CHF"), "doc_date": dec.get("doc_date"), "due_date": dec.get("due_date"),
         "account_no": pipeline._master(t, "accounts", dec.get("account_id")).get("no"), "tax_code": pipeline._master(t, "taxes", dec.get("tax_id")).get("code"),
-        "payment_mode": dec["payment_mode"], "payment_account_id": dec.get("payment_account_id"), "remember": bool(a.get("remember")),
+        "payment_mode": dec["payment_mode"], "payment_account_id": dec.get("payment_account_id"), "amount_chf": dec.get("amount_chf"), "remember": bool(a.get("remember")),
     }
     if missing:
         raise ToolError("Felder fehlen: " + ", ".join(missing))

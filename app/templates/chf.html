@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}CHF-Beträge – finance{% endblock %}
+{% from "_chf.html" import chf_table with context %}
+{% block content %}
+<h2>CHF-Beträge</h2>
+{% if err %}<p class="error">{{ err }}</p>{% endif %}
+<div class="bar"><div class="tabs"><a href="/chf" class="{{ 'on' if not tenant }}">Alle</a>{% for t in tenants %}<a href="/chf?tenant={{ t.code }}" class="{{ 'on' if tenant == t.code }}">{{ t.code }}</a>{% endfor %}</div></div>
+<p class="muted">Bezahlte Belege in Fremdwährung. Betrag in CHF laut Karten- oder Bankabrechnung eingeben, die Buchung geht sofort an bexio (CHF, Originalbetrag im Buchungstext).</p>
+{% if not chf_docs %}<p class="empty">Keine Belege offen.</p>{% else %}{{ chf_table(chf_docs, '/chf', tenant) }}{% endif %}
+{% endblock %}

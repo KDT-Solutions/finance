@@ -125,3 +125,25 @@ def test_tax_from_document_not_rule(db):
     # 4xxx account gets the VM code
     assert rules.pick_tax(t, 90, 8.1)["code"] == "VM81"
     assert rules.pick_tax(t, 40, 8.1)["code"] == "VB81"
+
+
+def _usd_card_llm():
+    return {"is_receipt": True, "document_type": "receipt", "supplier_name": "Hornbach", "document_number": "R2", "document_date": "2026-10-26",
+            "currency": "USD", "total_gross": 49.75, "supplier_country": "US", "payment_status": "paid", "paid_hint": "Paid with card", "card_last4": "1234",
+            "confidence": {"total_gross": 0.99, "document_date": 0.98}}
+
+
+def test_decide_paid_foreign_currency_waits_for_chf(db):
+    t = db.query(Tenant).one()
+    sup, _ = rules.match_supplier(db, t.id, name="Hornbach Baumarkt AG")
+    d = rules.decide(db, t, group="Finance KDT", qr=None, llm=_usd_card_llm(), text="", supplier=sup, rule=rules.find_rule(sup, ""))
+    assert d.reasons == [] and d.auto is True
+    assert d.needs_chf is True and d.payment_mode == "card" and d.currency == "USD"
+
+
+def test_decide_open_foreign_currency_stays_manual(db):
+    t = db.query(Tenant).one()
+    llm = {**_usd_card_llm(), "document_type": "invoice", "payment_status": "unpaid", "paid_hint": "", "card_last4": ""}
+    d = rules.decide(db, t, group="Finance toPay KDT", qr=None, llm=llm, text="", supplier=None, rule=None)
+    assert d.needs_chf is False
+    assert "Fremdwährung USD (Phase 1 manuell)" in d.reasons

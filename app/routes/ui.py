@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import logging
 from datetime import datetime, timezone
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
@@ -45,8 +46,21 @@ def _counts(db: Session) -> dict[str, int]:
     return {c: n for c, n in rows}
 
 
+def _payment_labels(db: Session) -> dict[int, str]:
+    return {p.id: p.label + (f" ****{p.card_last4}" if p.card_last4 else "") for p in db.query(PaymentAccount).all()}
+
+
+def _chf_docs(db: Session, tenant: str = ""):
+    """Paid foreign-currency documents waiting for the CHF amount."""
+    q = db.query(Document).join(Tenant).filter(Document.state == "needs_chf")
+    if tenant:
+        q = q.filter(Tenant.code == tenant)
+    return q.order_by(Document.received_at.asc())
+
+
 def _ctx(request: Request, db: Session, sess: dict | None, **kw) -> dict:
-    return {"request": request, "sess": sess, "tenants": _tenants(db), "counts": _counts(db), "settings": get_settings(), **kw}
+    return {"request": request, "sess": sess, "tenants": _tenants(db), "counts": _counts(db), "chf_count": _chf_docs(db).count(),
+            "settings": get_settings(), **kw}
 
 
 def _tenant_or_404(db: Session, code: str) -> Tenant:
@@ -157,13 +171,48 @@ def index(sess: dict = Depends(auth.require_login)):
 
 # --- todo / documents --------------------------------------------------------------
 @router.get("/todo", response_class=HTMLResponse)
-def todo(request: Request, tenant: str = "", state: str = "", db: Session = Depends(get_db), sess: dict = Depends(auth.require_login)):
+def todo(request: Request, tenant: str = "", state: str = "", err: str = "", db: Session = Depends(get_db), sess: dict = Depends(auth.require_login)):
     q = db.query(Document).join(Tenant)
     if tenant:
         q = q.filter(Tenant.code == tenant)
     states = [state] if state else ["needs_review", "error"]
     docs = q.filter(Document.state.in_(states)).order_by(Document.received_at.asc()).limit(200).all()
-    return templates.TemplateResponse(request, "todo.html", _ctx(request, db, sess, docs=docs, tenant=tenant, state=state))
+    chf_docs = [] if state else _chf_docs(db, tenant).limit(200).all()
+    return templates.TemplateResponse(request, "todo.html", _ctx(request, db, sess, docs=docs, chf_docs=chf_docs, tenant=tenant, state=state, err=err,
+                                                                    payment_labels=_payment_labels(db)))
+
+
+@router.get("/chf", response_class=HTMLResponse)
+def chf_page(request: Request, tenant: str = "", err: str = "", db: Session = Depends(get_db), sess: dict = Depends(auth.require_login)):
+    return templates.TemplateResponse(request, "chf.html", _ctx(request, db, sess, chf_docs=_chf_docs(db, tenant).limit(500).all(), tenant=tenant, err=err,
+                                                                   payment_labels=_payment_labels(db)))
+
+
+@router.post("/docs/{doc_id}/chf")
+async def doc_chf(request: Request, doc_id: int, db: Session = Depends(get_db), sess: dict = Depends(auth.require_csrf)):
+    doc = db.get(Document, doc_id)
+    if not doc:
+        raise HTTPException(404)
+    form = await request.form()
+    back = form.get("back") if form.get("back") in ("/todo", "/chf") else "/chf"
+    back += f"?tenant={form.get('tenant') or ''}"
+    try:
+        amount_chf = round(float(str(form.get("amount_chf") or "").replace("'", "").replace(",", ".")), 2)
+    except ValueError:
+        amount_chf = 0
+    if amount_chf <= 0:
+        return RedirectResponse(back + "&err=" + quote(f"Beleg {doc.id}: CHF-Betrag fehlt"), status_code=303)
+    if doc.state != "needs_chf":
+        return RedirectResponse(back + "&err=" + quote(f"Beleg {doc.id} ist im Status {doc.state}"), status_code=303)
+    z = _zammad()
+    try:
+        res = actions.book_chf(db, z, doc, amount_chf, actor=sess["u"])
+    finally:
+        if z:
+            z.close()
+    if not res["booked"]:
+        return RedirectResponse(f"/docs/{doc.id}", status_code=303)
+    return RedirectResponse(back, status_code=303)
 
 
 @router.get("/docs/{doc_id}", response_class=HTMLResponse)
@@ -214,6 +263,8 @@ def _apply_form(db: Session, doc: Document, form) -> dict:
     dec["due_date"] = (form.get("due_date") or "").strip()
     dec["document_number"] = (form.get("document_number") or "").strip()[:80]
     dec["already_paid"] = form.get("already_paid") == "1"
+    if "amount_chf" in form:
+        dec["amount_chf"] = num(form.get("amount_chf"))
     # supplier rename / merge
     if dec["supplier_name"] and (not doc.supplier or rules.normalize_name(dec["supplier_name"]) != doc.supplier.name_key):
         existing = db.query(Supplier).filter(Supplier.tenant_id == doc.tenant_id, Supplier.name_key == rules.normalize_name(dec["supplier_name"])).first()
@@ -241,6 +292,8 @@ async def doc_book(request: Request, doc_id: int, db: Session = Depends(get_db),
     missing = [k for k in ("account_id", "amount", "doc_date") if not dec.get(k)]
     if dec.get("payment_mode") != "open" and not dec.get("payment_account_id"):
         missing.append("payment_account_id")
+    if actions.needs_chf(dec) and not dec.get("amount_chf"):
+        missing.append("Betrag CHF")
     if missing or not doc.supplier:
         doc.state = "needs_review"
         doc.review_reason = "Felder fehlen: " + ", ".join(missing or ["Lieferant"])

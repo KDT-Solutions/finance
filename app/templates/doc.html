@@ -39,6 +39,7 @@
       <label>Fällig <input name="due_date" type="date" value="{{ dec.due_date or '' }}"></label>
       <label>Betrag <input name="amount" value="{{ '%.2f'|format(dec.amount) if dec.amount else '' }}" required inputmode="decimal"></label>
       <label>Währung <input name="currency" value="{{ dec.currency or 'CHF' }}" maxlength="3"></label>
+      {% if (dec.currency or 'CHF')|upper != 'CHF' %}<label>Betrag CHF (bezahlt, laut Abrechnung) <input name="amount_chf" value="{{ '%.2f'|format(dec.amount_chf) if dec.amount_chf else '' }}" inputmode="decimal"></label>{% endif %}
       <label class="wide">Aufwandkonto
         {{ account_picker('account_no', md.get('accounts', []), dec.account_id, required=True, list_id='dl-accounts') }}
       </label>
