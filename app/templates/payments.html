@@ -4,8 +4,8 @@
 <h2>Zahlungen</h2>
 {% if msg %}<p class="ok">{{ msg }}</p>{% endif %}
 {% if err %}<p class="error">{{ err }}</p>{% endif %}
-<div class="filters">
-  {% for t in tenants %}<a href="/payments?tenant={{ t.code }}" class="{{ 'on' if t.code == tenant.code }}">{{ t.code }}</a>{% endfor %}
+<div class="bar"><div class="tabs">
+  {% for t in tenants %}<a href="/payments?tenant={{ t.code }}" class="{{ 'on' if t.code == tenant.code }}">{{ t.code }}</a>{% endfor %}</div>
 </div>
 <p class="muted">Offene Kreditorenrechnungen aus dem Tool, noch nicht bezahlt und noch in keinem Zahlfile.
   Zahl-IBAN {{ tenant.code }}: {% if tenant.payment_iban %}<code>{{ tenant.payment_iban }}</code> ({{ tenant.payment_name or tenant.name }}){% else %}<span class="error">fehlt, unter Einstellungen setzen</span>{% endif %}</p>
