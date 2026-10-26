@@ -205,6 +205,8 @@ class Booking(Base):
     # included in a pain.001 payment file (name + time), so it is not paid twice
     payment_file: Mapped[str | None] = mapped_column(String(80))
     payment_file_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Zammad ticket set to "pending reminder" by the tool until this time (paid via payment file, bexio not yet settled)
+    ticket_wait_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     booked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
     document: Mapped[Document] = relationship(back_populates="booking")

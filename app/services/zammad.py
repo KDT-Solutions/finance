@@ -5,12 +5,26 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 import httpx
 
 from ..config import get_settings
 
 log = logging.getLogger(__name__)
+
+PENDING_REMINDER = "pending reminder"
+
+
+def parse_time(value) -> datetime | None:
+    """Zammad timestamps ("2026-11-09T08:00:00.000Z") as aware datetime, None if empty or unreadable."""
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
 @dataclass
@@ -121,6 +135,15 @@ class ZammadClient:
 
     def set_state(self, ticket_id: int, state: str) -> dict:
         return self._put(f"/api/v1/tickets/{ticket_id}", {"state": state})
+
+    def set_pending(self, ticket_id: int, until: datetime) -> dict:
+        """Ticket auf "pending reminder" (Warten auf Erinnerung) bis until."""
+        return self._put(f"/api/v1/tickets/{ticket_id}", {"state": PENDING_REMINDER, "pending_time": until.astimezone(timezone.utc).isoformat()})
+
+    def ticket_state(self, ticket_id: int) -> tuple[str, datetime | None]:
+        """(Statusname, pending_time) des Tickets."""
+        t = self.ticket(ticket_id)
+        return str(t.get("state") or ""), parse_time(t.get("pending_time"))
 
     def groups(self) -> list[dict]:
         return self._get("/api/v1/groups")

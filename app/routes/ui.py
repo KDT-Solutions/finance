@@ -406,8 +406,16 @@ def payments_unmark(booking_id: int, db: Session = Depends(get_db), sess: dict =
     b = db.get(Booking, booking_id)
     if not b:
         raise HTTPException(404)
-    payments.unmark(db, b, actor=sess["u"])
-    return RedirectResponse(f"/payments?tenant={db.get(Tenant, b.tenant_id).code}", status_code=303)
+    code = db.get(Tenant, b.tenant_id).code
+    z = _zammad()
+    try:
+        payments.unmark(db, z, b, actor=sess["u"])
+    except ValueError as e:
+        return RedirectResponse(f"/payments?tenant={code}&err={e}", status_code=303)
+    finally:
+        if z:
+            z.close()
+    return RedirectResponse(f"/payments?tenant={code}&msg=Markierung entfernt, Ticket wieder offen", status_code=303)
 
 
 @router.get("/rules", response_class=HTMLResponse)

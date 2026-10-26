@@ -16,7 +16,11 @@ in Zammad tickets, the tool reads them, decides how to book them and writes to b
    paid receipt → manual entry expense account / payment account with the PDF attached.
    Everything else lands in the review queue; each confirmed decision becomes a rule.
 5. **Feedback** – internal note in the ticket, ticket closed for paid receipts, open
-   invoices are closed once bexio reports the bill as paid.
+   invoices are closed once bexio reports the bill as paid. An invoice put into a payment
+   file sets its ticket to "pending reminder" for 14 days (`PAYMENT_WAIT_DAYS`, 09:00 local);
+   the paid check closes it once bexio reports the bill as paid, otherwise it waits another
+   14 days after the reminder is due. Removing an invoice from a payment file is refused for
+   paid bills, notes the withdrawn file in the ticket and opens the ticket again.
 
 ## Stack
 

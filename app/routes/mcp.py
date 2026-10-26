@@ -801,7 +801,7 @@ def t_open_payments(db, a):
     return payments.open_bills(db, t, include_in_file=bool(a.get("include_in_file")))
 
 
-@tool("create_payment_file", "Zahlfile (pain.001.001.09, Swiss Payment Standard) für offene Rechnungen erstellen; die Rechnungen werden als 'im Zahlfile' markiert und die Tickets bekommen eine Notiz. "
+@tool("create_payment_file", "Zahlfile (pain.001.001.09, Swiss Payment Standard) für offene Rechnungen erstellen; die Rechnungen werden als 'im Zahlfile' markiert, die Tickets bekommen eine Notiz und gehen auf Warten (pending reminder, 14 Tage). "
       "Ohne booking_ids werden alle zahlbaren offenen Rechnungen des Mandanten genommen. Download-URL kommt zurück.",
       {"tenant": TENANT, "booking_ids": {"type": "array", "items": {"type": "integer"}}, "execution_date": {"type": "string", "description": "YYYY-MM-DD, Standard heute"}, "confirm": CONFIRM}, ["tenant"])
 def t_create_payment_file(db, a):
@@ -827,15 +827,23 @@ def t_create_payment_file(db, a):
             "download": f"{get_settings().public_base_url}/payments/files/{t.code}/{name}", "payments": [{k: r[k] for k in ("supplier", "amount", "currency", "document_number")} for r in used]}
 
 
-@tool("unmark_payment", "Rechnung aus der Zahlfile-Markierung lösen (nur wenn das Zahlfile nicht hochgeladen wurde).",
+@tool("unmark_payment", "Rechnung aus der Zahlfile-Markierung lösen (nur wenn das Zahlfile nicht hochgeladen wurde). Wird verweigert, wenn die Rechnung in bexio bezahlt ist; "
+      "das Ticket bekommt eine Notiz und wird wieder geöffnet.",
       {"booking_id": {"type": "integer"}, "confirm": CONFIRM}, ["booking_id"])
 def t_unmark_payment(db, a):
     b = db.get(Booking, int(a["booking_id"]))
     if not b:
         raise ToolError("Buchung nicht gefunden")
     if not a.get("confirm"):
-        return _preview(f"Markierung {b.payment_file} von Buchung {b.id} entfernen", {})
-    payments.unmark(db, b, actor=ACTOR)
+        return _preview(f"Markierung {b.payment_file} von Buchung {b.id} entfernen. Nur wenn das Zahlfile nicht hochgeladen wurde, sonst wird doppelt bezahlt.", {})
+    z = _zammad()
+    try:
+        payments.unmark(db, z, b, actor=ACTOR)
+    except ValueError as e:
+        raise ToolError(str(e))
+    finally:
+        if z:
+            z.close()
     return {"ok": True}
 
 

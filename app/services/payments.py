@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import date, datetime
+from datetime import date, datetime, time, timedelta
 
 from sqlalchemy.orm import Session
 
 from ..config import get_settings
 from ..models import Booking, Document, Tenant, now
-from . import audit, pain001
-from .zammad import ZammadClient
+from . import audit, bexio as bx, pain001
+from .zammad import PENDING_REMINDER, ZammadClient
 
 log = logging.getLogger(__name__)
 
@@ -20,6 +20,58 @@ def local_today() -> date:
     from zoneinfo import ZoneInfo
 
     return now().astimezone(ZoneInfo(get_settings().tz)).date()
+
+
+def wait_until(today: date | None = None) -> datetime:
+    """Ende der Wartezeit: heute + payment_wait_days, payment_wait_hour Uhr Ortszeit (aware)."""
+    from zoneinfo import ZoneInfo
+
+    s = get_settings()
+    day = (today or local_today()) + timedelta(days=s.payment_wait_days)
+    return datetime.combine(day, time(s.payment_wait_hour), tzinfo=ZoneInfo(s.tz))
+
+
+def _fmt(dt: datetime) -> str:
+    from zoneinfo import ZoneInfo
+
+    return dt.astimezone(ZoneInfo(get_settings().tz)).strftime("%d.%m.%Y")
+
+
+def set_waiting(db: Session, z: ZammadClient, booking: Booking, note: str) -> datetime:
+    """Notiz ins Ticket, Ticket auf "pending reminder" bis wait_until(), Zeitpunkt an der Buchung merken."""
+    until = wait_until()
+    tid = booking.document.zammad_ticket_id
+    z.add_note(tid, f"{note} Ticket auf Warten bis {_fmt(until)}.")
+    z.set_pending(tid, until)
+    booking.ticket_wait_until = until
+    audit.log(db, "ticket.waiting", tenant_id=booking.tenant_id, entity="document", entity_id=booking.document_id,
+              details={"until": until.isoformat(), "file": booking.payment_file})
+    return until
+
+
+def keep_waiting(db: Session, z: ZammadClient, booking: Booking) -> str | None:
+    """Rechnung ist im Zahlfile, in bexio aber noch nicht bezahlt. Ticket auf Warten halten:
+    - wartet und Wartezeit abgelaufen: erneut + payment_wait_days
+    - wartet noch: nichts
+    - offen/neu und vom Tool noch nie auf Warten gesetzt (Altfall vor dieser Regel): auf Warten setzen
+    - offen/neu, obwohl das Tool es schon auf Warten gesetzt hatte (neue Mail, von Hand geöffnet): nicht anfassen
+    - geschlossen oder anderer Status: nicht anfassen
+    Gibt "waiting", "rewaiting" oder None zurück."""
+    tid = booking.document.zammad_ticket_id if booking.document else None
+    if not tid or not booking.payment_file:
+        return None
+    state, pending = z.ticket_state(tid)
+    if state == PENDING_REMINDER:
+        if pending is not None and pending > now():
+            return None
+        set_waiting(db, z, booking, "finance: Rechnung ist in bexio noch nicht als bezahlt abgeglichen "
+                                    f"(Zahlfile {booking.payment_file}), erneut geprüft.")
+        return "rewaiting"
+    if state in ("new", "open") and booking.ticket_wait_until is None:
+        set_waiting(db, z, booking, f"finance: Zahlung im Zahlfile {booking.payment_file} enthalten, "
+                                    "in bexio noch nicht als bezahlt abgeglichen.")
+        return "waiting"
+    return None
 
 
 def payment_info(doc: Document) -> dict:
@@ -114,10 +166,10 @@ def create_file(db: Session, z: ZammadClient | None, tenant: Tenant, booking_ids
         b.payment_file, b.payment_file_at = name, created
         if z and b.document.zammad_ticket_id:
             try:
-                z.add_note(b.document.zammad_ticket_id, f"finance: Zahlung im Zahlfile {name} enthalten ({r['currency']} {float(r['amount']):.2f}, "
-                                                        f"Ausführung {(execution_date or created.date()).isoformat()}). Ticket bleibt offen bis der Banksync die Zahlung meldet.")
+                set_waiting(db, z, b, f"finance: Zahlung im Zahlfile {name} enthalten ({r['currency']} {float(r['amount']):.2f}, "
+                                      f"Ausführung {execution_date.strftime('%d.%m.%Y')}). Abschluss, sobald die Rechnung in bexio als bezahlt abgeglichen ist.")
             except Exception:  # noqa: BLE001
-                log.exception("note failed")
+                log.exception("zammad wait failed for %s", b.document.zammad_ticket_id)
     audit.log(db, "payment_file.created", tenant_id=tenant.id, actor=actor, entity="payment_file", details={"file": name, "count": len(rows), "total": round(sum(float(r["amount"]) for r in rows), 2)})
     db.commit()
     return name, data, rows
@@ -142,8 +194,42 @@ def file_path(tenant: Tenant, name: str) -> str | None:
     return path if os.path.isfile(path) else None
 
 
-def unmark(db: Session, booking: Booking, actor: str) -> None:
-    """Remove a booking from its payment file bookkeeping (file was not uploaded), so it can be included again."""
-    audit.log(db, "payment_file.unmarked", tenant_id=booking.tenant_id, actor=actor, entity="booking", entity_id=booking.id, details={"file": booking.payment_file})
-    booking.payment_file, booking.payment_file_at = None, None
+def _bill_paid(db: Session, booking: Booking) -> bool:
+    """True, wenn die Rechnung im Tool oder live in bexio bezahlt ist. Ist bexio nicht erreichbar, gilt sie als
+    möglicherweise bezahlt (lieber nicht abmelden als doppelt zahlen)."""
+    if booking.paid_at or str(booking.bexio_status or "").lower() == "paid":
+        return True
+    if not booking.bexio_bill_id:
+        return False
+    tenant = booking.tenant or db.get(Tenant, booking.tenant_id)
+    client = bx.BexioClient(db, tenant)
+    try:
+        status = str(client.get_bill(booking.bexio_bill_id).get("status", "")).lower()
+    except Exception as e:  # noqa: BLE001
+        raise ValueError(f"bexio-Status der Rechnung nicht prüfbar ({e}), Markierung bleibt") from e
+    finally:
+        client.close()
+    booking.bexio_status = status
+    return status == "paid"
+
+
+def unmark(db: Session, z: ZammadClient | None, booking: Booking, actor: str) -> None:
+    """Remove a booking from its payment file bookkeeping (file was not uploaded), so it can be included again.
+    Refused when the bill is already paid. The ticket gets a note (the old file must not be used) and is opened again."""
+    if not booking.payment_file:
+        raise ValueError("Buchung ist in keinem Zahlfile")
+    if _bill_paid(db, booking):
+        db.commit()
+        raise ValueError("Rechnung ist in bexio bereits bezahlt, Markierung bleibt")
+    old = booking.payment_file
+    audit.log(db, "payment_file.unmarked", tenant_id=booking.tenant_id, actor=actor, entity="booking", entity_id=booking.id, details={"file": old})
+    booking.payment_file, booking.payment_file_at, booking.ticket_wait_until = None, None, None
     db.commit()
+    tid = booking.document.zammad_ticket_id if booking.document else None
+    if z and tid:
+        try:
+            z.add_note(tid, f"finance: Zahlung aus Zahlfile {old} zurückgezogen, dieses Zahlfile nicht verwenden. "
+                            "Rechnung ist wieder offen und kommt ins nächste Zahlfile.")
+            z.set_state(tid, "open")
+        except Exception:  # noqa: BLE001
+            log.exception("zammad feedback after unmark failed for %s", tid)

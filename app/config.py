@@ -50,6 +50,10 @@ class Settings(BaseSettings):
     max_pdf_bytes: int = 20_000_000
     # daily summary push (local hour)
     summary_hour: int = 9
+    # paid via payment file but not settled in bexio yet: ticket waits this many days (pending reminder), then re-check
+    payment_wait_days: int = 14
+    # local hour of the pending reminder
+    payment_wait_hour: int = 9
 
 
 @lru_cache

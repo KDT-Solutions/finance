@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from ..config import get_settings
 from ..models import KV, Booking, Document, Extraction, PaymentAccount, Rule, Supplier, Tenant, now
-from . import audit, bexio as bx, extract, fx, qr as qrmod, rules
+from . import audit, bexio as bx, extract, fx, payments, qr as qrmod, rules
 from .zammad import ZammadClient
 
 log = logging.getLogger(__name__)
@@ -393,15 +393,23 @@ def check_paid(db: Session, z: ZammadClient, tenant: Tenant) -> int:
             b.bexio_status = status
             if status == "paid":
                 b.paid_at = now()
+                b.ticket_wait_until = None
                 db.add(b)
                 if b.document.zammad_ticket_id:
                     try:
+                        # closes open and waiting (pending reminder) tickets alike
                         z.add_note(b.document.zammad_ticket_id, "finance: Rechnung ist in bexio als bezahlt abgeglichen, Ticket geschlossen.")
                         z.set_state(b.document.zammad_ticket_id, "closed")
                         closed += 1
                     except Exception:  # noqa: BLE001
                         log.exception("close failed")
                 audit.log(db, "bill.paid", tenant_id=tenant.id, entity="document", entity_id=b.document_id)
+            elif b.payment_file:
+                # paid via payment file, bank sync not through yet: keep the ticket waiting
+                try:
+                    payments.keep_waiting(db, z, b)
+                except Exception:  # noqa: BLE001
+                    log.exception("keep waiting failed for booking %s", b.id)
             db.commit()
     finally:
         client.close()
