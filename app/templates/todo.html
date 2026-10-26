@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Todo – finance{% endblock %}
+{% from "_chf.html" import chf_table with context %}
 {% block content %}
 <div class="bar">
   <div class="tabs">
@@ -19,6 +20,13 @@
     <button>PDF hochladen</button>
   </form>
 </div>
+{% if err %}<p class="error">{{ err }}</p>{% endif %}
+{% if chf_docs %}
+<h3>CHF-Betrag fehlt</h3>
+<p class="muted">Bezahlt in Fremdwährung, sonst alles klar. Betrag in CHF laut Abrechnung eingeben, die Buchung geht sofort an bexio.</p>
+{{ chf_table(chf_docs, '/todo', tenant) }}
+<h3>Zu prüfen</h3>
+{% endif %}
 {% if not docs %}<p class="empty">Nichts zu tun.</p>{% else %}
 <table class="cards">
 <thead><tr><th>Mandant</th><th>Eingang</th><th>Ticket</th><th>Lieferant</th><th class="r">Betrag</th><th>Status</th><th>Grund</th><th></th></tr></thead>

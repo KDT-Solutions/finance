@@ -12,6 +12,7 @@
   <nav>
     <a href="/todo" class="{{ 'on' if request.url.path.startswith('/todo') or request.url.path.startswith('/docs') }}">Todo
       {% set total = counts.values()|sum %}{% if total %}<span class="badge">{{ total }}</span>{% endif %}</a>
+    <a href="/chf" class="{{ 'on' if request.url.path.startswith('/chf') }}">CHF-Beträge{% if chf_count %} <span class="badge">{{ chf_count }}</span>{% endif %}</a>
     <a href="/bookings" class="{{ 'on' if request.url.path.startswith('/bookings') }}">Gebucht</a>
     <a href="/payments" class="{{ 'on' if request.url.path.startswith('/payments') }}">Zahlungen</a>
     <a href="/rules" class="{{ 'on' if request.url.path.startswith('/rules') }}">Regeln</a>

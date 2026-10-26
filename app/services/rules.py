@@ -142,6 +142,8 @@ class Decision:
     document_number: str = ""
     supplier_name: str = ""
     move_to_topay: bool = False
+    # paid in a foreign currency: booked in CHF once the amount from the card/bank statement is entered
+    needs_chf: bool = False
     reasons: list[str] = field(default_factory=list)
     auto: bool = False
     matched_by: str = ""
@@ -243,8 +245,6 @@ def decide(db: Session, tenant: Tenant, *, group: str, qr: dict | None, llm: dic
         reasons.append(f"QR-Betrag {qr_amount:.2f} weicht vom gelesenen Total {llm_amount:.2f} ab")
     if not d.doc_date:
         reasons.append("Belegdatum fehlt")
-    if d.currency != "CHF":
-        reasons.append(f"Fremdwährung {d.currency} (Phase 1 manuell)")
     for k in ("total_gross", "document_date"):
         if conf.get(k, 1.0) < s.auto_book_min_confidence:
             reasons.append(f"Konfidenz {k} nur {conf.get(k, 0):.2f}")
@@ -300,6 +300,13 @@ def decide(db: Session, tenant: Tenant, *, group: str, qr: dict | None, llm: dic
                     break
         if d.payment_mode == "paid":
             reasons.append("Zahlkonto nicht bestimmbar (Karte/privat/Bank)")
+
+    # --- foreign currency: open bills stay manual, paid ones wait for the CHF amount ----
+    if d.currency != "CHF":
+        if d.payment_mode in ("card", "private", "bank_paid") and d.payment_account_id:
+            d.needs_chf = True
+        else:
+            reasons.append(f"Fremdwährung {d.currency} (Phase 1 manuell)")
 
     # --- VAT code: from the document, never blindly from the rule ---------------------
     foreign = is_foreign(qr, llm)

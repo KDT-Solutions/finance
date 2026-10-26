@@ -148,7 +148,7 @@ class Document(Base):
     ticket_title: Mapped[str | None] = mapped_column(String(300))
     received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
-    # new | extracted | needs_review | booked | skipped | error | cancelled | not_a_receipt
+    # new | extracted | needs_review | needs_chf | booked | skipped | error | cancelled | not_a_receipt
     state: Mapped[str] = mapped_column(String(20), default="new", index=True)
     review_reason: Mapped[str | None] = mapped_column(Text)
     last_error: Mapped[str | None] = mapped_column(Text)

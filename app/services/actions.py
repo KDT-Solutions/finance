@@ -66,6 +66,18 @@ def book_with_decision(db: Session, z: ZammadClient | None, doc: Document, dec: 
     return out
 
 
+def book_chf(db: Session, z: ZammadClient | None, doc: Document, amount_chf: float, *, actor: str) -> dict:
+    """Paid in a foreign currency: store the CHF amount from the card/bank statement and book with the stored decision."""
+    dec = dict(doc.decision or {})
+    dec["amount_chf"] = round(float(amount_chf), 2)
+    return book_with_decision(db, z, doc, dec, remember=False, keywords=[], actor=actor)
+
+
+def needs_chf(dec: dict) -> bool:
+    """Decision is paid (card/private/bank) in a foreign currency, so it can only be booked with a CHF amount."""
+    return (dec.get("currency") or "CHF").upper() != "CHF" and (dec.get("payment_mode") or "open") != "open"
+
+
 def skip_document(db: Session, z: ZammadClient | None, doc: Document, kind: str, *, close_ticket: bool, actor: str) -> None:
     doc.state = {"skip": "skipped", "not_receipt": "not_a_receipt", "cancel": "cancelled"}.get(kind, "skipped")
     audit.log(db, f"document.{doc.state}", tenant_id=doc.tenant_id, actor=actor, entity="document", entity_id=doc.id)
