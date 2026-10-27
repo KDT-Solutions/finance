@@ -329,6 +329,12 @@ class BexioClient:
     def create_invoice(self, payload: dict) -> dict:
         return self.post("/2.0/kb_invoice", payload)
 
+    def add_invoice_comment(self, invoice_id: int, text: str, user_id: int, user_name: str) -> dict:
+        """Internal comment on a debtor invoice (POST /2.0/kb_invoice/{id}/comment; text, user_id, user_name required).
+        The API has no way to attach a file to a debtor invoice, the comment points to the PDF in bexio files."""
+        return self.post(f"/2.0/kb_invoice/{invoice_id}/comment",
+                         {"text": text, "user_id": user_id, "user_name": user_name[:80], "is_public": False})
+
     def issue_invoice(self, invoice_id: int) -> dict:
         """Draft -> pending (open, the bank sync can match the incoming payment)."""
         return self.post(f"/2.0/kb_invoice/{invoice_id}/issue")

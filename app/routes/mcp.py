@@ -602,6 +602,31 @@ def t_merge_suppliers(db, a):
     return {"ok": True, **out}
 
 
+@tool("attach_credit_pdf", "Provisions-Gutschrift: PDF nach bexio Dateien hochladen und an der Debitorenrechnung als interner Kommentar "
+      "vermerken (die bexio-API kann keine Datei an Debitorenrechnungen hängen). Für bereits gebuchte Gutschriften ohne PDF.",
+      {"id": {"type": "integer", "description": "Beleg-ID"}, "confirm": CONFIRM}, ["id"])
+def t_attach_credit_pdf(db, a):
+    d = db.get(Document, int(a["id"]))
+    if not d or not d.booking or d.booking.kind != "credit_invoice" or not d.booking.bexio_bill_id:
+        raise ToolError("Beleg ist keine gebuchte Provisions-Gutschrift")
+    if d.booking.bexio_file_id:
+        raise ToolError(f"PDF bereits abgelegt (bexio Datei {d.booking.bexio_file_id})")
+    if not a.get("confirm"):
+        return _preview(f"{d.filename} an Debitorenrechnung {d.booking.bexio_bill_id} vermerken", {"document": d.id, "tenant": d.tenant.code})
+    client = bx.BexioClient(db, d.tenant)
+    try:
+        file_id = pipeline.attach_credit_pdf(client, d, int(d.booking.bexio_bill_id), pipeline.read_pdf(d))
+    finally:
+        client.close()
+    if not file_id:
+        raise ToolError("Hochladen oder Kommentar fehlgeschlagen, siehe Log")
+    d.booking.bexio_file_id = file_id
+    audit.log(db, "credit.pdf_attached", tenant_id=d.tenant_id, actor=ACTOR, entity="document", entity_id=d.id,
+              details={"invoice": d.booking.bexio_bill_id, "file": file_id})
+    db.commit()
+    return {"ok": True, "invoice": d.booking.bexio_bill_id, "bexio_file_id": file_id}
+
+
 @tool("list_payment_accounts", "Zahlkonten (Bank, Kreditkarten, privat) je Mandant.", {"tenant": TENANT})
 def t_payment_accounts(db, a):
     q = db.query(PaymentAccount).join(Tenant)

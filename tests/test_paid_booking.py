@@ -34,12 +34,27 @@ class FakeBexio:
         FakeBexio.invoices.append(payload)
         return {"id": 1720, "document_nr": "RE-01720", "kb_item_status_id": 7}
 
+    def search_contacts(self, name):
+        return []
+
+    def create_contact(self, name):
+        FakeBexio.contacts.append(name)
+        return {"id": 999}
+
+    def upload_file(self, filename, content):
+        FakeBexio.uploads.append(filename)
+        return [{"id": 77, "uuid": "f-uuid-77", "name": filename}]
+
+    def add_invoice_comment(self, invoice_id, text, user_id, user_name):
+        FakeBexio.comments.append((invoice_id, text, user_id, user_name))
+        return {"id": 1}
+
     def issue_invoice(self, invoice_id):
         FakeBexio.issued.append(invoice_id)
         return {"success": True}
 
     def me(self):
-        return {"id": 1}
+        return {"id": 1, "firstname": "Kim", "lastname": "Thurnherr"}
 
     def close(self):
         pass
@@ -60,6 +75,7 @@ def env(monkeypatch, tmp_path):
     FakeBexio.entry_response, FakeBexio.file_response, FakeBexio.file_error = ENTRY, [FILE], None
     FakeBexio.entries, FakeBexio.files = [], []
     FakeBexio.invoices, FakeBexio.issued = [], []
+    FakeBexio.uploads, FakeBexio.comments, FakeBexio.contacts = [], [], []
     t = Tenant(code="AAA", name="Beispiel AAA GmbH", zammad_group_paid="Finance AAA", zammad_group_topay="Finance toPay AAA",
                master_data={"accounts": [{"id": 170, "no": "4200"}], "taxes": [{"id": 7, "code": "VIM"}]})
     db.add(t)
@@ -198,3 +214,6 @@ def test_commission_credit_note_becomes_debtor_invoice(env):
     assert (b.kind, b.bexio_bill_id, b.bexio_status) == ("credit_invoice", "1720", "pending")
     rule = db.get(Rule, out["rule_id"])
     assert rule.payment_mode == "credit" and rule.account_id == 170
+    # the API cannot attach files to debtor invoices: PDF to bexio files, internal comment on the invoice
+    assert FakeBexio.uploads == ["beleg.pdf"] and b.bexio_file_id == "f-uuid-77"
+    assert FakeBexio.comments == [(1720, "Beleg: beleg.pdf (bexio Dateien, ID f-uuid-77), Ticket#-", 1, "Kim Thurnherr")]
