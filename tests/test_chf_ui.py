@@ -142,3 +142,23 @@ def test_account_fields_show_number_and_name(client):
     c.post(f"/docs/{doc_id}/book", data=form, follow_redirects=False)
     doc = Session().get(Document, doc_id)
     assert doc.state == "booked" and doc.decision["account_id"] == 170
+
+
+def test_payment_file_download_starts_after_create(client, monkeypatch):
+    from app.services import payments
+
+    c, Session, _ = client
+    t = Session().query(Tenant).one()
+    folder = payments._folder(t)
+    import os
+    os.makedirs(folder, exist_ok=True)
+    open(os.path.join(folder, "FINAAA1.xml"), "w").write("<x/>")
+    open(os.path.join(folder, "FINAAA0.xml" + payments.VOID_SUFFIX), "w").write("<x/>")
+    monkeypatch.setattr(payments, "create_file", lambda db, z, t, ids, d, actor: ("FINAAA1.xml", b"<x/>", [1]))
+    r = c.post("/payments/file", data={"csrf": "tok", "tenant": "AAA", "booking_id": ["1"]}, follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"].endswith("&dl=FINAAA1.xml")
+    page = c.get(r.headers["location"]).text
+    assert 'href="/payments/files/AAA/FINAAA1.xml" download id="autodownload"' in page
+    # no auto download for unknown or withdrawn files, nor without dl
+    for q in ("&dl=FINAAA9.xml", "&dl=FINAAA0.xml", "&dl=../x", ""):
+        assert 'id="autodownload"' not in c.get("/payments?tenant=AAA&msg=x" + q).text

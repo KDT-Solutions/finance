@@ -2,7 +2,7 @@
 {% block title %}Zahlungen – finance{% endblock %}
 {% block content %}
 <h2>Zahlungen</h2>
-{% if msg %}<p class="ok">{{ msg }}</p>{% endif %}
+{% if msg %}<p class="ok">{{ msg }}{% if download %} · <a href="/payments/files/{{ tenant.code }}/{{ download }}" download id="autodownload">{{ download }} herunterladen</a>{% endif %}</p>{% endif %}
 {% if err %}<p class="error">{{ err }}</p>{% endif %}
 <div class="bar"><div class="tabs">
   {% for t in tenants %}<a href="/payments?tenant={{ t.code }}" class="{{ 'on' if t.code == tenant.code }}">{{ t.code }}</a>{% endfor %}</div>

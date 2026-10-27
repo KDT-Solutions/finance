@@ -463,14 +463,17 @@ def booking_restore(booking_id: int, db: Session = Depends(get_db), sess: dict =
 
 # --- payments (pain.001) -----------------------------------------------------------
 @router.get("/payments", response_class=HTMLResponse)
-def payments_page(request: Request, tenant: str = "", msg: str = "", err: str = "", db: Session = Depends(get_db), sess: dict = Depends(auth.require_login)):
+def payments_page(request: Request, tenant: str = "", msg: str = "", err: str = "", dl: str = "", db: Session = Depends(get_db), sess: dict = Depends(auth.require_login)):
     tenants = _tenants(db)
     t = next((x for x in tenants if x.code == tenant), None) or (tenants[0] if tenants else None)
     if not t:
         raise HTTPException(404)
     rows = payments.open_bills(db, t)
     in_file = [r for r in payments.open_bills(db, t, include_in_file=True) if r["payment_file"]]
-    return templates.TemplateResponse(request, "payments.html", _ctx(request, db, sess, tenant=t, rows=rows, in_file=in_file, files=payments.list_files(t),
+    files = payments.list_files(t)
+    # just created: the page starts the download (only for an existing, not withdrawn file of this tenant)
+    download = next((f["name"] for f in files if f["name"] == dl and not f["void"]), None)
+    return templates.TemplateResponse(request, "payments.html", _ctx(request, db, sess, tenant=t, rows=rows, in_file=in_file, files=files, download=download,
                                                                       today=pain001.next_bank_day(payments.local_today()).isoformat(), msg=msg, err=err))
 
 
@@ -491,7 +494,8 @@ async def payments_file(request: Request, db: Session = Depends(get_db), sess: d
     finally:
         if z:
             z.close()
-    return RedirectResponse(f"/payments?tenant={t.code}&msg=Zahlfile {name} erstellt ({len(rows)} Zahlungen), unten herunterladen", status_code=303)
+    msg = quote(f"Zahlfile {name} erstellt ({len(rows)} Zahlungen), der Download startet automatisch")
+    return RedirectResponse(f"/payments?tenant={t.code}&msg={msg}&dl={quote(name)}", status_code=303)
 
 
 @router.get("/payments/files/{code}/{name}")
@@ -517,10 +521,10 @@ def _replace(db: Session, booking_id: int, sess: dict, remove: bool) -> Redirect
         if z:
             z.close()
     if res["new"]:
-        msg = f"{res['old']} gesperrt, neues Zahlfile {res['new']} mit {len(res['kept'])} Zahlungen, unten herunterladen"
-    else:
-        msg = f"{res['old']} gesperrt, keine Zahlung mehr übrig"
-    return RedirectResponse(f"/payments?tenant={code}&msg={msg}", status_code=303)
+        msg = f"{res['old']} gesperrt, neues Zahlfile {res['new']} mit {len(res['kept'])} Zahlungen, der Download startet automatisch"
+        return RedirectResponse(f"/payments?tenant={code}&msg={quote(msg)}&dl={quote(res['new'])}", status_code=303)
+    msg = f"{res['old']} gesperrt, keine Zahlung mehr übrig"
+    return RedirectResponse(f"/payments?tenant={code}&msg={quote(msg)}", status_code=303)
 
 
 @router.post("/payments/replace/{booking_id}")
