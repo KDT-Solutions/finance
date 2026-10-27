@@ -21,3 +21,15 @@ document.querySelectorAll("table:not(.cards)").forEach(function (t) {
   t.parentNode.insertBefore(w, t);
   w.appendChild(t);
 });
+
+// Payment file just created: start the download once, then drop ?dl= so a reload does not download again.
+(function () {
+  var a = document.getElementById("autodownload");
+  if (!a) return;
+  a.click();
+  try {
+    var u = new URL(window.location.href);
+    u.searchParams.delete("dl");
+    window.history.replaceState(null, "", u.pathname + u.search);
+  } catch (e) { /* old browser: a reload downloads again, harmless */ }
+})();
