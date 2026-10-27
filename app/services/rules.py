@@ -46,6 +46,9 @@ def find_supplier_by_name(db: Session, tenant_id: int, name: str) -> Supplier | 
     return None
 
 
+MERGED_PREFIX = "_merged_into_"
+
+
 def merge_suppliers(db: Session, source: Supplier, target: Supplier) -> dict:
     """Move documents and rules from source to target, carry over IBANs, name variants, UID, address and bexio
     contact (if the target has none). The source stays as an empty record that no name lookup finds any more."""
@@ -71,9 +74,10 @@ def merge_suppliers(db: Session, source: Supplier, target: Supplier) -> dict:
             setattr(target, f, getattr(source, f))
     if not target.bexio_contact_id:
         target.bexio_contact_id = source.bexio_contact_id
-    source.name_key = f"_merged_into_{target.id}"
+    source.name_key = f"{MERGED_PREFIX}{target.id}"
     source.name_variants = []
     source.ibans = []
+    source.uid = None
     db.flush()
     return {"documents": len(docs), "rules": len(moved_rules), "source_bexio_contact_id": source.bexio_contact_id}
 
@@ -83,7 +87,9 @@ def match_supplier(db: Session, tenant_id: int, *, iban: str = "", uid: str = ""
     iban = normalize_iban(iban)
     uid = normalize_uid(uid)
     key = normalize_name(name)
-    suppliers = db.query(Supplier).filter(Supplier.tenant_id == tenant_id).all()
+    # merged suppliers stay as empty records; older merges kept their UID, so skip them explicitly
+    suppliers = [s for s in db.query(Supplier).filter(Supplier.tenant_id == tenant_id).order_by(Supplier.id).all()
+                 if not (s.name_key or "").startswith(MERGED_PREFIX)]
     if iban:
         for s in suppliers:
             if iban in [normalize_iban(x) for x in (s.ibans or [])]:

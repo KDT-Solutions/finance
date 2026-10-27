@@ -58,3 +58,24 @@ def test_dedup_plan_archive_paid():
     assert [r["action"] for r in g["contacts"]] == ["main", "archive", "mark", "mark", "none"]
     plan(g, 1, sales_checked={3}, archive_paid=True)
     assert g["contacts"][2]["action"] == "archive"
+
+
+def test_merged_supplier_is_not_matched_by_uid():
+    # sipcall: the provision created "Backbone Solutions AG (sipcall.ch)" with the UID, merged into the existing supplier
+    db = _db()
+    t = Tenant(code="T", name="T", zammad_group_paid="P", zammad_group_topay="Q")
+    db.add(t)
+    db.flush()
+    target = Supplier(tenant_id=t.id, display_name="sipcall by Backbone Solutions AG", name_key=rules.normalize_name("sipcall by Backbone Solutions AG"),
+                      ibans=[], name_variants=[], bexio_contact_id=20)
+    source = Supplier(tenant_id=t.id, display_name="Backbone Solutions AG (sipcall.ch)", name_key=rules.normalize_name("Backbone Solutions AG (sipcall.ch)"),
+                      ibans=[], name_variants=[], uid="CHE-102.755.328")
+    db.add_all([target, source])
+    db.flush()
+    rules.merge_suppliers(db, source, target)
+    assert target.uid == "CHE-102.755.328" and source.uid is None
+    assert rules.match_supplier(db, t.id, uid="CHE-102.755.328", name="Backbone Solutions AG (sipcall.ch)") == (target, "uid")
+    # merges made before this fix kept the source UID: the merged record is skipped anyway
+    source.uid = "CHE-102.755.328"
+    db.flush()
+    assert rules.match_supplier(db, t.id, uid="CHE-102.755.328")[0] is target
