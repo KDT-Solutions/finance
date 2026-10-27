@@ -77,6 +77,9 @@ def ingest_tenant(db: Session, z: ZammadClient, tenant: Tenant) -> int:
                 continue
             try:
                 atts = invoices_over_receipts(z.pdf_attachments(tid))
+                # the same PDF often hangs at the mail and at its forward in one ticket; the first copy is not in the
+                # database yet (no autoflush), so remember the hashes of this ticket as well
+                seen: set[str] = set()
                 for att in atts:
                     if att.size and att.size > s.max_pdf_bytes:
                         log.warning("attachment too large: ticket %s %s", tid, att.filename)
@@ -85,6 +88,9 @@ def ingest_tenant(db: Session, z: ZammadClient, tenant: Tenant) -> int:
                     if not content.startswith(b"%PDF"):
                         continue
                     sha = hashlib.sha256(content).hexdigest()
+                    if sha in seen:
+                        continue
+                    seen.add(sha)
                     dup = db.query(Document).filter(Document.tenant_id == tenant.id, Document.sha256 == sha).first()
                     if dup:
                         if dup.zammad_ticket_id != tid:
