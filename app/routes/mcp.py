@@ -602,6 +602,25 @@ def t_merge_suppliers(db, a):
     return {"ok": True, **out}
 
 
+@tool("reset_booking", "Gebuchten Beleg zurück in die Prüfung, wenn die Rechnung in bexio gelöscht wurde (Debitorenrechnung einer Gutschrift "
+      "oder offene Kreditorenrechnung). Prüft zuerst, dass sie in bexio nicht mehr existiert; danach kann neu gebucht werden.",
+      {"id": {"type": "integer", "description": "Beleg-ID"}, "confirm": CONFIRM}, ["id"])
+def t_reset_booking(db, a):
+    d = db.get(Document, int(a["id"]))
+    if not d or not d.booking:
+        raise ToolError("Beleg nicht gefunden oder nicht gebucht")
+    if not a.get("confirm"):
+        return _preview(f"Buchung von Beleg {d.id} zurücksetzen", {"kind": d.booking.kind, "bexio_id": d.booking.bexio_bill_id, "amount": d.booking.amount})
+    client = bx.BexioClient(db, d.tenant)
+    try:
+        state = actions.reset_booking(db, client, d, actor=ACTOR)
+    except ValueError as e:
+        raise ToolError(str(e)) from e
+    finally:
+        client.close()
+    return {"ok": True, "state": state}
+
+
 @tool("attach_credit_pdf", "Provisions-Gutschrift: PDF nach bexio Dateien hochladen und an der Debitorenrechnung als interner Kommentar "
       "vermerken (die bexio-API kann keine Datei an Debitorenrechnungen hängen). Für bereits gebuchte Gutschriften ohne PDF.",
       {"id": {"type": "integer", "description": "Beleg-ID"}, "confirm": CONFIRM}, ["id"])

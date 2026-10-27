@@ -96,6 +96,36 @@ def skip_document(db: Session, z: ZammadClient | None, doc: Document, kind: str,
             log.exception("close failed")
 
 
+def reset_booking(db: Session, client, doc: Document, *, actor: str) -> str:
+    """Booking deleted in bexio (e.g. debtor invoice with the wrong contact): remove the booking in the tool and send the
+    document back to review so it can be booked again. Refused while the bexio document still exists."""
+    from . import bexio as bx
+
+    b = doc.booking
+    if not b:
+        raise ValueError("Beleg hat keine Buchung")
+    if b.payment_file:
+        raise ValueError(f"Rechnung steckt im Zahlfile {b.payment_file}, zuerst dort zurückziehen")
+    paths = {"credit_invoice": f"/2.0/kb_invoice/{b.bexio_bill_id}", "bill_open": f"/4.0/purchase/bills/{b.bexio_bill_id}"}
+    if b.kind not in paths:
+        raise ValueError(f"Zurücksetzen für {b.kind} nicht unterstützt, in bexio und im Tool von Hand bereinigen")
+    try:
+        client.get(paths[b.kind])
+    except bx.BexioError as e:
+        if e.status != 404:
+            raise
+    else:
+        raise ValueError(f"bexio {b.kind} {b.bexio_bill_id} existiert noch, zuerst in bexio löschen")
+    details = {"kind": b.kind, "bexio_id": b.bexio_bill_id, "amount": b.amount}
+    db.delete(b)
+    doc.booking = None
+    doc.state = "needs_review"
+    doc.review_reason = f"Buchung zurückgesetzt (bexio {b.kind} {b.bexio_bill_id} gelöscht), neu buchen"
+    audit.log(db, "booking.reset", tenant_id=doc.tenant_id, actor=actor, entity="document", entity_id=doc.id, details=details)
+    db.commit()
+    return doc.state
+
+
 def restore_document(db: Session, doc: Document, *, actor: str) -> str:
     """Undo skip / not_a_receipt / cancel in the tool. A cancelled booking becomes ok again (bexio was never touched),
     otherwise the document goes back to the review queue."""
