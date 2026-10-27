@@ -82,6 +82,35 @@ def merge_suppliers(db: Session, source: Supplier, target: Supplier) -> dict:
     return {"documents": len(docs), "rules": len(moved_rules), "source_bexio_contact_id": source.bexio_contact_id}
 
 
+def supplier_candidates(db: Session, tenant_id: int, name: str, limit: int = 10) -> list[dict]:
+    """The known suppliers most similar to the name, for the AI choice (merged records left out)."""
+    key = normalize_name(name)
+    scored = []
+    for s in db.query(Supplier).filter(Supplier.tenant_id == tenant_id).all():
+        if (s.name_key or "").startswith(MERGED_PREFIX):
+            continue
+        names = [s.name_key, *[normalize_name(v) for v in (s.name_variants or [])]]
+        score = max((SequenceMatcher(None, key, n).ratio() for n in names if n), default=0.0)
+        # brand names: any shared word of 4+ letters counts (sipcall / backbone)
+        words = {w for w in key.split() if len(w) >= 4}
+        if words and any(words & set(n.split()) for n in names if n):
+            score += 0.5
+        scored.append((score, s))
+    scored.sort(key=lambda x: -x[0])
+    return [{"id": s.id, "name": s.display_name, "other_names": s.name_variants or [], "uid": s.uid,
+             "address": " ".join(x for x in (s.street, s.postcode, s.city, s.country) if x)} for _, s in scored[:limit]]
+
+
+def learn_supplier_identity(supplier: Supplier, *, name: str = "", uid: str = "", iban: str = "") -> None:
+    """After a confirmed AI match: remember the spelling, UID and IBAN so the fixed matching finds it next time."""
+    if name and normalize_name(name) != supplier.name_key and normalize_name(name) not in [normalize_name(v) for v in (supplier.name_variants or [])]:
+        supplier.name_variants = [*(supplier.name_variants or []), name[:200]]
+    if uid and not supplier.uid:
+        supplier.uid = normalize_uid(uid) or None
+    if iban and normalize_iban(iban) not in [normalize_iban(x) for x in (supplier.ibans or [])]:
+        supplier.ibans = [*(supplier.ibans or []), normalize_iban(iban)]
+
+
 def match_supplier(db: Session, tenant_id: int, *, iban: str = "", uid: str = "", name: str = "") -> tuple[Supplier | None, str]:
     """Returns (supplier, how) with how in iban|uid|name|fuzzy|''."""
     iban = normalize_iban(iban)

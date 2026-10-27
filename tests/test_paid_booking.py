@@ -216,4 +216,57 @@ def test_commission_credit_note_becomes_debtor_invoice(env):
     assert rule.payment_mode == "credit" and rule.account_id == 170
     # the API cannot attach files to debtor invoices: PDF to bexio files, internal comment on the invoice
     assert FakeBexio.uploads == ["beleg.pdf"] and b.bexio_file_id == "f-uuid-77"
-    assert FakeBexio.comments == [(1720, "Beleg: beleg.pdf (bexio Dateien, ID f-uuid-77), Ticket#-", 1, "Kim Thurnherr")]
+    link = f"{get_settings().public_base_url.rstrip('/')}/docs/{doc.id}/pdf"
+    assert FakeBexio.comments == [(1720, f"Beleg: {link} (beleg.pdf, auch in bexio Dateien, ID f-uuid-77), Ticket#-", 1, "Kim Thurnherr")]
+
+
+def _sipcall_setup(db, doc, monkeypatch, choice):
+    from app.services import pipeline
+
+    t = doc.tenant
+    sip = Supplier(tenant_id=t.id, display_name="sipcall by Backbone Solutions AG", name_key="sipcall by backbone solutions",
+                   ibans=[], name_variants=[], bexio_contact_id=20, street="Chaltenbodenstrasse 4a", postcode="8834", city="Schindellegi")
+    db.add(sip)
+    db.add(PaymentAccount(tenant_id=t.id, label="Bank", kind="bank", bexio_account_id=98))
+    db.commit()
+    llm = {"is_receipt": True, "document_type": "credit_note", "is_commission": True, "supplier_name": "Backbone Solutions AG (sipcall.ch)",
+           "supplier_uid": "CHE-102.755.328", "supplier_street": "Chaltenbodenstrasse 4a", "supplier_postcode": "8834", "supplier_city": "Schindellegi",
+           "document_date": "2026-10-06", "currency": "CHF", "total_gross": 127.05, "total_net": 117.55,
+           "vat_lines": [{"rate": 8.1, "base": 117.55, "amount": 9.5}], "confidence": {"total_gross": 0.99, "document_date": 0.99}}
+    seen = {}
+
+    def choose(document, candidates):
+        seen["document"], seen["candidates"] = document, candidates
+        return choice(sip) if choice else None
+
+    monkeypatch.setattr(pipeline.extract, "extract", lambda pdf, ctx: (llm, "test"))
+    monkeypatch.setattr(pipeline.extract, "choose_supplier", choose)
+    monkeypatch.setattr(pipeline.qrmod, "read_swiss_qr", lambda pdf: None)
+    monkeypatch.setattr(pipeline.qrmod, "extract_text", lambda pdf: "")
+    doc.supplier_id = None
+    db.commit()
+    db.refresh(doc)
+    pipeline.process_document(db, None, doc)
+    return sip, seen
+
+
+def test_ai_assigns_known_supplier_for_review(env, monkeypatch):
+    db, doc, dec = env
+    doc.tenant.commission_account_id = 170
+    sip, seen = _sipcall_setup(db, doc, monkeypatch, lambda s: {"supplier_id": s.id, "confidence": 0.95, "reason": "gleiche Adresse, sipcall ist Marke"})
+    assert seen["candidates"][0]["id"] == sip.id  # most similar first
+    assert doc.supplier_id == sip.id and doc.decision["matched_by"] == "ai" and doc.state == "needs_review"
+    assert "Lieferant per KI zugeordnet: sipcall by Backbone Solutions AG (gleiche Adresse, sipcall ist Marke), prüfen" in doc.review_reason
+    assert db.query(Supplier).filter(Supplier.name_key == "backbone solutions sipcall ch").count() == 0
+    # nothing learned before a person confirms
+    assert sip.name_variants == [] and sip.uid is None
+    out = actions.book_with_decision(db, None, doc, dict(doc.decision), remember=False, keywords=[], actor="test")
+    assert out["booked"] and FakeBexio.contacts == [] and FakeBexio.invoices[0]["contact_id"] == 20
+    assert sip.name_variants == ["Backbone Solutions AG (sipcall.ch)"] and sip.uid == "CHE-102.755.328"
+
+
+def test_ai_unsure_creates_new_supplier_as_before(env, monkeypatch):
+    db, doc, dec = env
+    sip, _ = _sipcall_setup(db, doc, monkeypatch, lambda s: {"supplier_id": s.id, "confidence": 0.4, "reason": "unsicher"})
+    assert doc.supplier_id != sip.id and doc.decision["matched_by"] == "new"
+    assert not any("KI" in r for r in doc.decision["reasons"])
