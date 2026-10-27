@@ -311,7 +311,7 @@ def _apply_form(db: Session, doc: Document, form) -> dict:
             if num(amount):
                 lines.append({"title": (title or "").strip()[:80], "amount": num(amount),
                               "account_id": _resolve_account(doc.tenant, acc), "tax_id": _resolve_tax(doc.tenant, tax)})
-        dec["lines"] = lines if len(lines) > 1 else []
+        dec["lines"] = rules.with_net(doc.tenant, lines) if len(lines) > 1 else []
     # supplier rename / merge
     if dec["supplier_name"] and (not doc.supplier or rules.normalize_name(dec["supplier_name"]) != doc.supplier.name_key):
         existing = db.query(Supplier).filter(Supplier.tenant_id == doc.tenant_id, Supplier.name_key == rules.normalize_name(dec["supplier_name"])).first()

@@ -213,6 +213,63 @@ def pick_tax(tenant: Tenant, account_id: int | None, rate: float) -> dict | None
     return taxes[0] if taxes else None
 
 
+def with_net(tenant: Tenant, lines: list[dict]) -> list[dict]:
+    """Edited positions of a customs invoice (a ZOLLM/ZOLLB position present): add the net amounts bexio gets with
+    item_net. The customs position is the tax itself, others are gross / (1 + rate). Other documents stay gross."""
+    taxes = {t.get("id"): t for t in (tenant.master_data or {}).get("taxes", [])}
+    if not any(str(taxes.get(ln.get("tax_id"), {}).get("type", "")).startswith("pre_customs") for ln in lines):
+        return [{k: v for k, v in ln.items() if k != "net"} for ln in lines]
+    out = []
+    for ln in lines:
+        t = taxes.get(ln.get("tax_id")) or {}
+        rate = t.get("rate")
+        customs = str(t.get("type", "")).startswith("pre_customs")
+        net = ln["amount"] if customs or not rate else round(ln["amount"] / (1 + float(rate) / 100), 2)
+        out.append({**ln, "net": net})
+    return out
+
+
+def split_customs(tenant: Tenant, account_id: int | None, llm: dict, total: float | None) -> tuple[list[dict], list[str]]:
+    """Import / customs invoice (DHL, UPS, Post ...): import VAT as its own position with the 100% customs code (ZOLLM on
+    4xxx material accounts, ZOLLB otherwise), duties without tax code, the courier fees as the rest with their VAT rate.
+    Returns ([], []) when the document is not a customs invoice."""
+    c = llm.get("customs") or {}
+    import_vat = _fmt_amount(c.get("import_vat")) or 0.0
+    if import_vat <= 0 or not total:
+        return [], []
+    reasons: list[str] = []
+    acc_no = _master(tenant, "accounts", account_id).get("no", "")
+    code = "ZOLLM" if acc_no.startswith("4") else "ZOLLB"
+    tax = next((t for t in (tenant.master_data or {}).get("taxes", []) if t.get("code") == code and t.get("active", True)), None)
+    if not tax:
+        reasons.append(f"Verzollung: Steuercode {code} fehlt in den Stammdaten")
+    # "net" is what bexio gets with item_net (as in the bills booked by hand): the import VAT line is the tax itself
+    lines = [{"title": "Einfuhrsteuer", "amount": import_vat, "net": import_vat, "account_id": None, "tax_id": tax["id"] if tax else None}]
+    duty = _fmt_amount(c.get("customs_duty")) or 0.0
+    if duty > 0:
+        lines.append({"title": "Zoll / Abgaben", "amount": duty, "net": duty, "account_id": None, "tax_id": None})
+        reasons.append(f"Verzollung: Zoll/Abgaben {duty:.2f} ohne Steuercode, Konto und Steuer prüfen")
+    rest = round(total - import_vat - duty, 2)
+    if rest < -0.005:
+        reasons.append(f"Verzollung: Einfuhrsteuer und Zoll ergeben mehr als das Total {total:.2f}")
+    elif rest > 0.005:
+        net = _fmt_amount(c.get("services_net")) or 0.0
+        vat = _fmt_amount(c.get("services_vat")) or 0.0
+        if net and abs(net + vat - rest) > 0.05:
+            reasons.append(f"Verzollung: Zusatzleistungen {net + vat:.2f} laut Beleg, Rest ist {rest:.2f}")
+        svc_tax = None
+        if vat > 0 and net > 0:
+            rate = round(vat / net * 100, 1)
+            # the courier charges the normal rate; derive it from the amounts and map to the printed Swiss rates
+            rate = min((8.1, 2.6, 3.8), key=lambda r: abs(r - rate))
+            svc_tax = pick_tax(tenant, account_id, rate)
+            if not svc_tax:
+                reasons.append(f"Kein Steuercode für {rate:g}% in den Stammdaten")
+        svc_net = net if net and abs(net + vat - rest) <= 0.05 else rest
+        lines.append({"title": "Zusatzleistungen", "amount": rest, "net": svc_net, "account_id": None, "tax_id": svc_tax["id"] if svc_tax else None})
+    return lines, reasons
+
+
 def split_by_vat(tenant: Tenant, account_id: int | None, llm: dict, total: float | None) -> tuple[list[dict], list[str]]:
     """Document with more than one VAT rate (e.g. 8.1% and 2.6%): one gross position per rate from the VAT summary,
     each with its own tax code. Rounding up to 5 Rappen goes to the largest position. Returns ([], []) for one rate."""
@@ -382,7 +439,13 @@ def decide(db: Session, tenant: Tenant, *, group: str, qr: dict | None, llm: dic
             reasons.append("Keine MWST auf dem Beleg ausgewiesen")
 
     # --- several VAT rates on one document: one position per rate -------------------------
-    if not foreign:
+    customs_lines, customs_reasons = split_customs(tenant, d.account_id, llm, d.amount)
+    if customs_lines:
+        d.lines = customs_lines
+        d.tax_id = customs_lines[0]["tax_id"]
+        reasons.append("Verzollungsrechnung: " + ", ".join(f"{ln['title']} {ln['amount']:.2f}" for ln in customs_lines) + ", Aufteilung prüfen")
+        reasons.extend(customs_reasons)
+    elif not foreign:
         lines, split_reasons = split_by_vat(tenant, d.account_id, llm, d.amount)
         if lines:
             d.lines = lines

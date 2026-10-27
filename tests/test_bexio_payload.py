@@ -51,3 +51,15 @@ def test_manual_entry_split():
     assert [(x["debit_account_id"], x["credit_account_id"], x["amount"], x["tax_id"], x["tax_account_id"]) for x in e] == [
         (170, 99, 32.4, 35, 170), (170, 99, 22.33, 34, 170)]
     assert e[1]["description"] == "Brack 49777632 MWST 2.6%"
+
+
+
+def test_customs_bill_is_net_like_the_manual_booking():
+    # DHL DBX2343262 as booked by hand in bexio: 22.46 VM81 (+1.82) and 173.00 ZOLLM, item_net, total 197.28
+    lines = [{"title": "Einfuhrsteuer", "amount": 173.00, "net": 173.00, "account_id": None, "tax_id": 9},
+             {"title": "Zusatzleistungen", "amount": 24.28, "net": 22.46, "account_id": None, "tax_id": 35}]
+    p = bx.build_bill_payload(supplier_id=141, contact_partner_id=1, supplier_name="DHL Express (Schweiz) AG", document_no="DBX2343262", title="",
+                              bill_date="2026-09-29", due_date="2026-10-06", currency="CHF", amount_gross=197.28, account_id=170,
+                              tax_id=9, text="Verzollung", attachment_ids=[], qr=None, lines=lines)
+    assert p["item_net"] is True and p["amount_calc"] == 197.28
+    assert [(li["amount"], li["tax_id"], li["booking_account_id"]) for li in p["line_items"]] == [(173.00, 9, 170), (22.46, 35, 170)]

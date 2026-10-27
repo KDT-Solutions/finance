@@ -349,15 +349,18 @@ def build_bill_payload(*, supplier_id: int, contact_partner_id: int | None, supp
     address, bill_date, due_date, manual_amount, item_net, line_items, discounts, attachment_ids; amount_calc when
     manual_amount is false). Line items carry 'title', not 'text'. Payment: type IBAN | QR | MANUAL with
     execution_date, amount, salary_payment required; iban, name, reference_no (27), message (140), bank_account_id.
-    lines: several positions (e.g. one per VAT rate), each {title, amount (gross), account_id, tax_id}; else one line."""
+    lines: several positions (e.g. one per VAT rate), each {title, amount (gross), account_id, tax_id}; else one line.
+    Positions with "net" (customs invoices) are sent net with item_net, like bills booked by hand in bexio: the import
+    VAT position (ZOLLM/ZOLLB, 100%) carries the tax itself as amount."""
     amount = round(float(amount_gross), 2)
     due = due_date or bill_date
     items = []
+    item_net = bool(lines) and all(ln.get("net") is not None for ln in lines)
     for i, ln in enumerate(lines or [{"title": "", "amount": amount, "account_id": account_id, "tax_id": tax_id}]):
         item = {
             "position": i,
             "title": (ln.get("title") or text or title or document_no or "Rechnung")[:80],
-            "amount": round(float(ln["amount"]), 2),
+            "amount": round(float(ln["net"] if item_net else ln["amount"]), 2),
             "booking_account_id": ln.get("account_id") or account_id,
         }
         if ln.get("tax_id"):
@@ -372,7 +375,7 @@ def build_bill_payload(*, supplier_id: int, contact_partner_id: int | None, supp
         "currency_code": currency or "CHF",
         "manual_amount": False,
         "amount_calc": amount,
-        "item_net": False,
+        "item_net": item_net,
         "address": {
             "lastname_company": (supplier_name or "Lieferant")[:80],
             "type": "COMPANY",
