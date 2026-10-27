@@ -181,3 +181,14 @@ def test_doc_page_books_commission_credit(client):
 def test_settings_commission_account(client):
     c, Session, _ = client
     assert 'name="commission_account_no"' in c.get("/settings").text
+
+
+def test_settings_offers_reconnect_when_connected(client):
+    c, Session, _ = client
+    db = Session()
+    t = db.query(Tenant).one()
+    t.bexio_refresh_token = "x"
+    db.commit()
+    page = c.get("/settings").text
+    assert 'href="/auth/bexio/start?tenant=AAA">Neu verbinden</a>' in page or ('href="/auth/bexio/start?tenant=AAA"' in page and "Neu verbinden" in page)
+    assert "/settings/tenant/AAA/disconnect" in page
