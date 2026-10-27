@@ -9,7 +9,7 @@ from ..config import get_settings
 
 log = logging.getLogger(__name__)
 
-PROMPT_VERSION = "2"
+PROMPT_VERSION = "3"
 
 SCHEMA = {
     "type": "object",
@@ -35,6 +35,12 @@ SCHEMA = {
         "vat_lines": {"type": "array", "description": "one entry per VAT rate from the VAT summary (e.g. 2.6% and 8.1% on one invoice): "
                       "rate in percent, base = net amount taxed at that rate, amount = VAT; include a 0% rate only if printed", "items": {"type": "object", "properties": {"rate": {"type": "number"}, "base": {"type": "number"}, "amount": {"type": "number"}}, "required": ["rate", "amount"]}},
         "line_items": {"type": "array", "items": {"type": "object", "properties": {"description": {"type": "string"}, "amount_gross": {"type": "number"}, "vat_rate": {"type": "number"}}, "required": ["description", "amount_gross"]}},
+        "customs": {"type": "object", "description": "only for import / customs invoices of couriers and forwarders (DHL, UPS, FedEx, "
+                    "Swiss Post 'Rechnung MWST / Verzollungskosten'), else omit: import_vat = import VAT paid for the goods "
+                    "('MwSt / TVA / IVA', 'Einfuhrsteuer'), customs_duty = 'Einfuhrzoll' plus other duties ('Sonstige Abgaben'), "
+                    "services_net = courier fees without VAT (e.g. Kontoabwicklungsgebühr, Vorlagegebühr), services_vat = VAT on those fees",
+                    "properties": {"import_vat": {"type": "number"}, "customs_duty": {"type": "number"},
+                                   "services_net": {"type": "number"}, "services_vat": {"type": "number"}}},
         "payment_status": {"type": "string", "enum": ["unpaid", "paid", "unknown"]},
         "paid_hint": {"type": "string", "description": "verbatim hint such as 'bezahlt mit Visa ****1234' or 'Zahlungsbestätigung', else empty"},
         "payment_method_hint": {"type": "string", "enum": ["card", "bank_transfer", "paypal", "twint", "direct_debit", "none", "unknown"]},

@@ -352,7 +352,7 @@ def t_book(db, a):
                 raise ToolError(f"Steuercode {ln['tax_code']} unbekannt")
             lines.append({"title": (ln.get("title") or "")[:80], "amount": round(float(ln["amount"]), 2),
                           "account_id": acc["id"] if acc else None, "tax_id": tx["id"] if tx else None})
-        dec["lines"] = lines if len(lines) > 1 else []
+        dec["lines"] = rules.with_net(t, lines) if len(lines) > 1 else []
     dec["payment_mode"] = dec.get("payment_mode") or "open"
     if dec["payment_mode"] == "open":
         dec["payment_account_id"] = None

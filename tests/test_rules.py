@@ -22,7 +22,9 @@ def db():
                                 "taxes": [{"id": 3, "code": "VB81", "rate": 8.1, "type": "pre_tax_investment", "active": True},
                                           {"id": 5, "code": "VM81", "rate": 8.1, "type": "pre_tax_material", "active": True},
                                           {"id": 6, "code": "VM26", "rate": 2.6, "type": "pre_tax_material", "active": True},
-                                          {"id": 7, "code": "VIM", "rate": None, "type": "pre_tax_material", "active": True}]})
+                                          {"id": 7, "code": "VIM", "rate": None, "type": "pre_tax_material", "active": True},
+                                          {"id": 9, "code": "ZOLLM", "rate": 100, "type": "pre_customs_tax_material", "active": True},
+                                          {"id": 11, "code": "ZOLLB", "rate": 100, "type": "pre_customs_tax_investment", "active": True}]})
         s.add(t)
         s.flush()
         sup = Supplier(tenant_id=t.id, display_name="Hornbach Baumarkt AG", name_key=rules.normalize_name("Hornbach Baumarkt AG"), ibans=["CH11"], uid="CHE-111.222.333", name_variants=[])
@@ -181,3 +183,45 @@ def test_single_rate_has_no_lines(db):
     t = db.query(Tenant).one()
     llm = {**_brack_llm(), "vat_lines": [{"rate": 8.1, "base": 50.65, "amount": 4.10}]}
     assert rules.split_by_vat(t, 90, llm, 54.75) == ([], [])
+
+
+
+def _dhl_llm(duty=0.0):
+    # DHL Rechnung MWST / Verzollungskosten DBX2343262: MwSt 173.00 (Code Z), Zusatzleistungen 22.46 + 1.82 (8.1%), Total 197.28
+    return {"is_receipt": True, "document_type": "invoice", "supplier_name": "DHL Express (Schweiz) AG", "document_number": "DBX2343262",
+            "document_date": "2026-09-29", "currency": "CHF", "total_gross": round(197.28 + duty, 2), "total_net": round(195.46 + duty, 2), "supplier_country": "CH",
+            "vat_lines": [{"rate": 8.1, "base": 22.46, "amount": 1.82}, {"rate": 0, "base": 173.00, "amount": 0}],
+            "customs": {"import_vat": 173.00, "customs_duty": duty, "services_net": 22.46, "services_vat": 1.82},
+            "payment_status": "unpaid", "confidence": {"total_gross": 0.99, "document_date": 0.99}}
+
+
+def test_decide_customs_invoice(db):
+    t = db.query(Tenant).one()
+    d = rules.decide(db, t, group="Finance toPay KDT", qr=None, llm=_dhl_llm(), text="", supplier=None, rule=None)
+    # default account 4400 (material): ZOLLM for the import VAT, VM81 for the courier fees; not split as 0% / 8.1%
+    assert d.lines == [{"title": "Einfuhrsteuer", "amount": 173.00, "net": 173.00, "account_id": None, "tax_id": 9},
+                       {"title": "Zusatzleistungen", "amount": 24.28, "net": 22.46, "account_id": None, "tax_id": 5}]
+    assert "Verzollungsrechnung: Einfuhrsteuer 173.00, Zusatzleistungen 24.28, Aufteilung prüfen" in d.reasons
+    assert not any(r.startswith("Mehrere MWST-Sätze") for r in d.reasons)
+
+
+def test_customs_on_investment_account_uses_zollb_and_duty_is_flagged(db):
+    t = db.query(Tenant).one()
+    lines, reasons = rules.split_customs(t, 40, _dhl_llm(duty=12.50), 209.78)  # 6200: investment / operating
+    assert [(ln["title"], ln["amount"], ln["tax_id"]) for ln in lines] == [
+        ("Einfuhrsteuer", 173.00, 11), ("Zoll / Abgaben", 12.50, None), ("Zusatzleistungen", 24.28, 3)]
+    assert reasons == ["Verzollung: Zoll/Abgaben 12.50 ohne Steuercode, Konto und Steuer prüfen"]
+
+
+def test_not_a_customs_invoice(db):
+    t = db.query(Tenant).one()
+    assert rules.split_customs(t, 90, _brack_llm(), 54.75) == ([], [])
+
+
+
+def test_with_net_only_for_customs(db):
+    t = db.query(Tenant).one()
+    edited = [{"title": "Einfuhrsteuer", "amount": 173.00, "tax_id": 9}, {"title": "DHL", "amount": 24.28, "tax_id": 5}]
+    assert [ln["net"] for ln in rules.with_net(t, edited)] == [173.00, 22.46]
+    plain = [{"title": "a", "amount": 32.42, "tax_id": 5, "net": 1}, {"title": "b", "amount": 22.33, "tax_id": 6}]
+    assert all("net" not in ln for ln in rules.with_net(t, plain))

@@ -380,6 +380,8 @@ def book(db: Session, z: ZammadClient | None, doc: Document, *, actor: str = "sy
             tax = _master(tenant, "taxes", dec.get("tax_id"))
             # paid in a foreign currency: the payment account was debited in CHF, book that amount
             original = ""
+            if lines and any(ln.get("net") is not None for ln in lines):
+                raise RuntimeError("Verzollungsrechnung als bezahlter Beleg wird nicht unterstützt, als offene Rechnung buchen")
             if booking.currency.upper() != "CHF" and lines:
                 raise RuntimeError("Positionen bei bezahltem Beleg in Fremdwährung werden nicht unterstützt")
             if booking.currency.upper() != "CHF":
