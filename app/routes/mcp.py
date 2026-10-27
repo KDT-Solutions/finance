@@ -185,6 +185,7 @@ def t_get_settings(db, a):
         "zammad_group_paid": t.zammad_group_paid, "zammad_group_topay": t.zammad_group_topay,
         "default_expense_account_no": acc(t.default_expense_account_id), "creditor_account_no": acc(t.creditor_account_id),
         "fee_account_no": acc(t.fee_account_id), "fx_diff_account_no": acc(t.fx_diff_account_id),
+        "commission_account_no": acc(t.commission_account_id),
         "default_tax_code": pipeline._master(t, "taxes", t.default_tax_id).get("code"),
         "bank_account": next(({"id": b["id"], "name": b["name"], "iban": b["iban"]} for b in md.get("bank_accounts", []) if b["id"] == t.bank_account_id), None),
         "payment_iban": t.payment_iban, "payment_name": t.payment_name,
@@ -197,7 +198,8 @@ def t_get_settings(db, a):
 
 @tool("set_tenant_settings", "Einstellungen eines Mandanten setzen (Konten per Kontonummer, Steuer per Code, Bankkonto per bexio-ID).",
       {"tenant": TENANT, "default_expense_account_no": {"type": "string"}, "creditor_account_no": {"type": "string"},
-       "fee_account_no": {"type": "string"}, "fx_diff_account_no": {"type": "string"}, "default_tax_code": {"type": "string"},
+       "fee_account_no": {"type": "string"}, "fx_diff_account_no": {"type": "string"},
+       "commission_account_no": {"type": "string", "description": "Ertragskonto für Provisions-Gutschriften, z.B. 3681"}, "default_tax_code": {"type": "string"},
        "bank_account_id": {"type": "integer"}, "zammad_group_paid": {"type": "string"}, "zammad_group_topay": {"type": "string"},
        "payment_iban": {"type": "string", "description": "IBAN des zahlenden Bankkontos für Zahlfiles"}, "payment_name": {"type": "string"},
        "active": {"type": "boolean"}, "confirm": CONFIRM}, ["tenant"])
@@ -205,7 +207,8 @@ def t_set_settings(db, a):
     t = _tenant(db, a["tenant"])
     changes = {}
     for key, col in (("default_expense_account_no", "default_expense_account_id"), ("creditor_account_no", "creditor_account_id"),
-                     ("fee_account_no", "fee_account_id"), ("fx_diff_account_no", "fx_diff_account_id")):
+                     ("fee_account_no", "fee_account_id"), ("fx_diff_account_no", "fx_diff_account_id"),
+                     ("commission_account_no", "commission_account_id")):
         if key in a:
             acc = _account(t, a[key])
             changes[col] = acc["id"] if acc else None
@@ -302,12 +305,13 @@ def t_get_doc(db, a):
 
 
 @tool("book_document", "Beleg buchen: Felder überschreiben (Konto per Nummer, Steuer per Code, Zahlkonto per Label) und in bexio verbuchen. "
-      "payment_mode open = offene Kreditorenrechnung, card/private/bank_paid = bezahlt (manuelle Buchung gegen Zahlkonto). "
+      "payment_mode open = offene Kreditorenrechnung, card/private/bank_paid = bezahlt (manuelle Buchung gegen Zahlkonto), "
+      "credit = Provisions-Gutschrift als Debitorenrechnung (Ertragskonto, Umsatzsteuercode). "
       "lines = Positionen (z.B. je MWST-Satz), Summe muss amount ergeben; [] bucht einzeilig. "
       "Bezahlt in Fremdwährung: amount_chf = belasteter CHF-Betrag laut Abrechnung, gebucht wird in CHF. "
       "remember=true merkt sich die Entscheidung als Regel für den Lieferanten.",
       {"id": {"type": "integer"}, "supplier_name": {"type": "string"}, "account_no": {"type": "string"}, "tax_code": {"type": "string"},
-       "payment_mode": {"type": "string", "enum": ["open", "card", "private", "bank_paid"]}, "payment_account": {"type": "string"},
+       "payment_mode": {"type": "string", "enum": ["open", "card", "private", "bank_paid", "credit"]}, "payment_account": {"type": "string"},
        "booking_text": {"type": "string"}, "amount": {"type": "number"}, "currency": {"type": "string"},
        "amount_chf": {"type": "number", "description": "nur bezahlt in Fremdwährung: belasteter Betrag in CHF laut Karten-/Bankabrechnung"},
        "lines": {"type": "array", "description": "Positionen brutto; account_no leer = Aufwandkonto des Belegs",
@@ -354,10 +358,10 @@ def t_book(db, a):
                           "account_id": acc["id"] if acc else None, "tax_id": tx["id"] if tx else None})
         dec["lines"] = rules.with_net(t, lines) if len(lines) > 1 else []
     dec["payment_mode"] = dec.get("payment_mode") or "open"
-    if dec["payment_mode"] == "open":
+    if dec["payment_mode"] in ("open", "credit"):
         dec["payment_account_id"] = None
     missing = [k for k in ("account_id", "amount", "doc_date") if not dec.get(k)]
-    if dec["payment_mode"] != "open" and not dec.get("payment_account_id"):
+    if dec["payment_mode"] not in ("open", "credit") and not dec.get("payment_account_id"):
         missing.append("payment_account")
     if actions.needs_chf(dec) and not dec.get("amount_chf"):
         missing.append("amount_chf")
@@ -448,7 +452,7 @@ def t_rules(db, a):
 RULE_PROPS = {
     "supplier_name": {"type": "string", "description": "Lieferant (wird angelegt, falls neu)"},
     "account_no": {"type": "string", "description": "Aufwandkonto, z.B. 6510"}, "tax_code": {"type": "string", "description": "Steuercode, z.B. VM81"},
-    "payment_mode": {"type": "string", "enum": ["open", "card", "private", "bank_paid"]},
+    "payment_mode": {"type": "string", "enum": ["open", "card", "private", "bank_paid", "credit"]},
     "payment_account": {"type": "string", "description": "Label oder ID des Zahlkontos (bei card/private/bank_paid)"},
     "booking_text": {"type": "string"}, "keywords": {"type": "array", "items": {"type": "string"}, "description": "leer = Standardregel des Lieferanten"},
     "amount_min": {"type": "number"}, "amount_max": {"type": "number"}, "auto_book": {"type": "boolean"}, "active": {"type": "boolean"},
@@ -461,7 +465,9 @@ RULE_PROPS = {
 def _upsert_rule(db: Session, t: Tenant, spec: dict) -> tuple[Rule, bool, dict]:
     sup = _supplier(db, t, spec.get("supplier_name") or "", create=True)
     keywords = [k.strip() for k in (spec.get("keywords") or []) if k.strip()]
-    rule = next((r for r in sup.rules if (r.keywords or []) == keywords), None)
+    # a commission rule (credit) lives beside the invoice rule of the same partner: match on that when the mode is given
+    credit = spec.get("payment_mode") == "credit" if spec.get("payment_mode") else None
+    rule = next((r for r in sup.rules if (r.keywords or []) == keywords and (credit is None or (r.payment_mode == "credit") == credit)), None)
     created = rule is None
     if created:
         rule = Rule(tenant_id=t.id, supplier_id=sup.id, keywords=keywords, learned_from="mcp", payment_mode="open", hits=0)
@@ -482,7 +488,7 @@ def _upsert_rule(db: Session, t: Tenant, spec: dict) -> tuple[Rule, bool, dict]:
         pa = _payment_account(db, t, spec["payment_account"])
         rule.payment_account_id = pa.id if pa else None
         changes["payment_account"] = pa.label if pa else None
-    if rule.payment_mode == "open":
+    if rule.payment_mode in ("open", "credit"):
         rule.payment_account_id = None
     for k in ("booking_text", "amount_min", "amount_max", "auto_book", "active"):
         if k in spec:

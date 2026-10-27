@@ -166,7 +166,8 @@ def process_document(db: Session, z: ZammadClient | None, doc: Document) -> None
             if changed:
                 db.add(supplier)
         doc.supplier = supplier
-        rule = rules.find_rule(supplier, text + " " + json.dumps(llm.get("line_items") or [], ensure_ascii=False)) if supplier else None
+        rule = rules.find_rule(supplier, text + " " + json.dumps(llm.get("line_items") or [], ensure_ascii=False),
+                               credit=rules.is_commission(llm)) if supplier else None
         doc.rule = rule
         decision = rules.decide(db, tenant, group=doc.zammad_group or "", qr=qr, llm=llm, text=text, supplier=supplier, rule=rule, matched_by=how)
         doc.decision = decision.to_dict()
@@ -332,7 +333,31 @@ def book(db: Session, z: ZammadClient | None, doc: Document, *, actor: str = "sy
         docno = dec.get("document_number") or ""
         booking = Booking(document_id=doc.id, tenant_id=tenant.id, amount=amount, currency=dec.get("currency") or "CHF")
 
-        if mode == "open":
+        if mode == "credit":
+            if booking.currency.upper() != "CHF":
+                raise RuntimeError(f"Provisions-Gutschrift in {booking.currency} wird nicht unterstützt")
+            title = f"Gutschrift {docno}".strip() if docno else (desc or "Gutschrift")
+            payload = bx.build_invoice_payload(
+                contact_id=contact_id, user_id=tenant.bexio_user_id or client.me().get("id"), title=title,
+                doc_date=dec.get("doc_date") or now().date().isoformat(), due_date=dec.get("due_date") or "",
+                amount_gross=amount, account_id=int(dec["account_id"]), tax_id=dec.get("tax_id"),
+                text=f"{desc} {docno}".strip(), reference=docno)
+            created = _one(client.create_invoice(payload))
+            invoice_id = created.get("id")
+            status = "draft"
+            try:
+                client.issue_invoice(invoice_id)
+                status = "pending"
+            except bx.BexioError as e:
+                log.warning("invoice %s created but not issued: %s", invoice_id, e)
+            booking.kind, booking.bexio_bill_id, booking.payload, booking.response, booking.bexio_status = "credit_invoice", str(invoice_id), payload, created, status
+            note = (f"finance: Provisions-Gutschrift als Debitorenrechnung in bexio angelegt ({status}), Eingang über den Banksync.\n"
+                    f"Partner: {dec.get('supplier_name')}\nBetrag: {booking.currency} {amount:.2f}\n"
+                    f"Konto: {_master(tenant, 'accounts', dec.get('account_id')).get('no', dec.get('account_id'))}, "
+                    f"Steuercode: {_master(tenant, 'taxes', dec.get('tax_id')).get('code', dec.get('tax_id') or '-')}\n"
+                    f"bexio Rechnung-ID: {invoice_id} {created.get('document_nr') or ''}".rstrip())
+            close_ticket = True
+        elif mode == "open":
             existing = client.find_bill(contact_id, docno)
             if existing:
                 booking.kind, booking.bexio_bill_id, booking.response, booking.bexio_status = "bill_open", str(existing.get("id")), existing, existing.get("status")
@@ -584,7 +609,7 @@ def learn_from_history(db: Session, tenant: Tenant, months: int = 24) -> dict:
                 sup.bexio_contact_id = sup.bexio_contact_id or sid
             if ibans:
                 sup.ibans = sorted(set(sup.ibans or []) | {i for i in ibans if i})
-            default_rule = next((r for r in sup.rules if not (r.keywords or [])), None)
+            default_rule = next((r for r in sup.rules if not (r.keywords or []) and r.payment_mode != "credit"), None)
             if default_rule is None:
                 db.add(Rule(tenant_id=tenant.id, supplier_id=sup.id, keywords=[], account_id=acc, tax_id=None,
                             payment_mode=payment_mode, payment_account_id=payment_account_id,

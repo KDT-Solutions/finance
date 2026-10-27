@@ -32,6 +32,7 @@
     <label>Zahl-IBAN (Zahlfile) <input name="payment_iban" value="{{ t.payment_iban or '' }}" placeholder="CH.. des Bankkontos"></label>
     <label>Zahlender Name (Zahlfile) <input name="payment_name" value="{{ t.payment_name or '' }}" placeholder="{{ t.name }}"></label>
     <label>Gebühren {{ account_input('fee_account_no', md.get('accounts', []), t.fee_account_id, 'dl-acc-' ~ t.code) }}</label>
+    <label>Provisionsertrag (Gutschriften) {{ account_input('commission_account_no', md.get('accounts', []), t.commission_account_id, 'dl-acc-' ~ t.code) }}</label>
     <label>Aktiv <select name="active"><option value="1" {{ 'selected' if t.active }}>ja</option><option value="0" {{ 'selected' if not t.active }}>nein</option></select></label>
     <div class="actions wide"><button>Speichern</button></div>
     {{ account_datalist('dl-acc-' ~ t.code, md.get('accounts', [])) }}

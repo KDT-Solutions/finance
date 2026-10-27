@@ -28,6 +28,7 @@ def client(monkeypatch, tmp_path):
     monkeypatch.setattr(get_settings(), "data_dir", str(tmp_path))
     FakeBexio.entry_response, FakeBexio.file_response, FakeBexio.file_error = ENTRY, [FILE], None
     FakeBexio.entries, FakeBexio.files = [], []
+    FakeBexio.invoices, FakeBexio.issued = [], []
     db = Session()
     t = Tenant(code="AAA", name="Beispiel AAA GmbH", zammad_group_paid="Finance AAA", zammad_group_topay="Finance toPay AAA",
                master_data={"accounts": [{"id": 170, "no": "6570", "name": "Informatikaufwand"}], "taxes": [{"id": 7, "code": "VIM"}]})
@@ -162,3 +163,21 @@ def test_payment_file_download_starts_after_create(client, monkeypatch):
     # no auto download for unknown or withdrawn files, nor without dl
     for q in ("&dl=FINAAA9.xml", "&dl=FINAAA0.xml", "&dl=../x", ""):
         assert 'id="autodownload"' not in c.get("/payments?tenant=AAA&msg=x" + q).text
+
+
+
+def test_doc_page_books_commission_credit(client):
+    c, Session, doc_id = client
+    assert 'value="credit"' in c.get(f"/docs/{doc_id}").text
+    form = _book_form(doc_id, Session, "127.05", [])
+    form.update({"payment_mode": "credit", "payment_account_id": "", "account_no": "6570 Informatikaufwand", "tax_code": "VIM"})
+    r = c.post(f"/docs/{doc_id}/book", data=form, follow_redirects=False)
+    assert r.status_code == 303
+    doc = Session().get(Document, doc_id)
+    assert doc.state == "booked" and doc.booking.kind == "credit_invoice"
+    assert doc.decision["payment_account_id"] is None and FakeBexio.invoices[0]["positions"][0]["unit_price"] == "127.05"
+
+
+def test_settings_commission_account(client):
+    c, Session, _ = client
+    assert 'name="commission_account_no"' in c.get("/settings").text

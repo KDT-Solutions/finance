@@ -9,7 +9,7 @@ from ..config import get_settings
 
 log = logging.getLogger(__name__)
 
-PROMPT_VERSION = "3"
+PROMPT_VERSION = "4"
 
 SCHEMA = {
     "type": "object",
@@ -41,6 +41,8 @@ SCHEMA = {
                     "services_net = courier fees without VAT (e.g. Kontoabwicklungsgebühr, Vorlagegebühr), services_vat = VAT on those fees",
                     "properties": {"import_vat": {"type": "number"}, "customs_duty": {"type": "number"},
                                    "services_net": {"type": "number"}, "services_vat": {"type": "number"}}},
+        "is_commission": {"type": "boolean", "description": "true if the document credits the recipient a commission, partner "
+                          "provision or referral fee (e.g. 'Partnerprovision', 'Gutschrift Provision'), i.e. income for the recipient"},
         "payment_status": {"type": "string", "enum": ["unpaid", "paid", "unknown"]},
         "paid_hint": {"type": "string", "description": "verbatim hint such as 'bezahlt mit Visa ****1234' or 'Zahlungsbestätigung', else empty"},
         "payment_method_hint": {"type": "string", "enum": ["card", "bank_transfer", "paypal", "twint", "direct_debit", "none", "unknown"]},

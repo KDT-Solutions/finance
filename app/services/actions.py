@@ -75,7 +75,7 @@ def book_chf(db: Session, z: ZammadClient | None, doc: Document, amount_chf: flo
 
 def needs_chf(dec: dict) -> bool:
     """Decision is paid (card/private/bank) in a foreign currency, so it can only be booked with a CHF amount."""
-    return (dec.get("currency") or "CHF").upper() != "CHF" and (dec.get("payment_mode") or "open") != "open"
+    return (dec.get("currency") or "CHF").upper() != "CHF" and (dec.get("payment_mode") or "open") not in ("open", "credit")
 
 
 def skip_document(db: Session, z: ZammadClient | None, doc: Document, kind: str, *, close_ticket: bool, actor: str) -> None:

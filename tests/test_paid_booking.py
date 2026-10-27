@@ -30,6 +30,17 @@ class FakeBexio:
             raise FakeBexio.file_error
         return FakeBexio.file_response
 
+    def create_invoice(self, payload):
+        FakeBexio.invoices.append(payload)
+        return {"id": 1720, "document_nr": "RE-01720", "kb_item_status_id": 7}
+
+    def issue_invoice(self, invoice_id):
+        FakeBexio.issued.append(invoice_id)
+        return {"success": True}
+
+    def me(self):
+        return {"id": 1}
+
     def close(self):
         pass
 
@@ -48,6 +59,7 @@ def env(monkeypatch, tmp_path):
     monkeypatch.setattr(bx, "BexioClient", FakeBexio)
     FakeBexio.entry_response, FakeBexio.file_response, FakeBexio.file_error = ENTRY, [FILE], None
     FakeBexio.entries, FakeBexio.files = [], []
+    FakeBexio.invoices, FakeBexio.issued = [], []
     t = Tenant(code="AAA", name="Beispiel AAA GmbH", zammad_group_paid="Finance AAA", zammad_group_topay="Finance toPay AAA",
                master_data={"accounts": [{"id": 170, "no": "4200"}], "taxes": [{"id": 7, "code": "VIM"}]})
     db.add(t)
@@ -170,3 +182,19 @@ def test_positions_must_add_up(env):
     out = actions.book_with_decision(db, None, doc, {**dec, "amount": 60.00, "lines": LINES}, remember=False, keywords=[], actor="test")
     assert not out["booked"] and "Positionen ergeben 54.73, Betrag ist 60.00" in doc.last_error
     assert FakeBexio.entries == []
+
+
+
+def test_commission_credit_note_becomes_debtor_invoice(env):
+    db, doc, dec = env
+    credit = {**dec, "payment_mode": "credit", "payment_account_id": None, "amount": 127.05, "document_number": "",
+              "booking_text": "Partnerprovision September 2026"}
+    out = actions.book_with_decision(db, None, doc, credit, remember=True, keywords=[], actor="test")
+    assert out["booked"] and doc.state == "booked"
+    inv = FakeBexio.invoices[0]
+    assert inv["contact_id"] == 515 and inv["positions"][0]["unit_price"] == "127.05" and inv["positions"][0]["account_id"] == 170
+    assert FakeBexio.issued == [1720] and FakeBexio.entries == []
+    b = doc.booking
+    assert (b.kind, b.bexio_bill_id, b.bexio_status) == ("credit_invoice", "1720", "pending")
+    rule = db.get(Rule, out["rule_id"])
+    assert rule.payment_mode == "credit" and rule.account_id == 170

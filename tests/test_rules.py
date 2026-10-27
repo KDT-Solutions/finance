@@ -18,13 +18,14 @@ def db():
     Base.metadata.create_all(engine)
     with SessionLocal() as s:
         t = Tenant(code="KDT", name="KDT", zammad_group_paid="Finance KDT", zammad_group_topay="Finance toPay KDT", default_expense_account_id=90, default_tax_id=5,
-                   master_data={"accounts": [{"id": 40, "no": "6200", "name": "Reparaturen"}, {"id": 90, "no": "4400", "name": "Einkauf DL"}],
+                   master_data={"accounts": [{"id": 40, "no": "6200", "name": "Reparaturen"}, {"id": 90, "no": "4400", "name": "Einkauf DL"}, {"id": 289, "no": "3681", "name": "Provisionen"}],
                                 "taxes": [{"id": 3, "code": "VB81", "rate": 8.1, "type": "pre_tax_investment", "active": True},
                                           {"id": 5, "code": "VM81", "rate": 8.1, "type": "pre_tax_material", "active": True},
                                           {"id": 6, "code": "VM26", "rate": 2.6, "type": "pre_tax_material", "active": True},
                                           {"id": 7, "code": "VIM", "rate": None, "type": "pre_tax_material", "active": True},
                                           {"id": 9, "code": "ZOLLM", "rate": 100, "type": "pre_customs_tax_material", "active": True},
-                                          {"id": 11, "code": "ZOLLB", "rate": 100, "type": "pre_customs_tax_investment", "active": True}]})
+                                          {"id": 11, "code": "ZOLLB", "rate": 100, "type": "pre_customs_tax_investment", "active": True},
+                                          {"id": 28, "code": "UN81", "rate": 8.1, "type": "sales_tax", "active": True}]})
         s.add(t)
         s.flush()
         sup = Supplier(tenant_id=t.id, display_name="Hornbach Baumarkt AG", name_key=rules.normalize_name("Hornbach Baumarkt AG"), ibans=["CH11"], uid="CHE-111.222.333", name_variants=[])
@@ -225,3 +226,62 @@ def test_with_net_only_for_customs(db):
     assert [ln["net"] for ln in rules.with_net(t, edited)] == [173.00, 22.46]
     plain = [{"title": "a", "amount": 32.42, "tax_id": 5, "net": 1}, {"title": "b", "amount": 22.33, "tax_id": 6}]
     assert all("net" not in ln for ln in rules.with_net(t, plain))
+
+
+
+def _sipcall_llm():
+    # sipcall Partnerprovision September 2026: 117.55 + MwSt 8.1% 9.50 = 127.05, wird überwiesen
+    return {"is_receipt": True, "document_type": "credit_note", "is_commission": True, "supplier_name": "Backbone Solutions AG",
+            "document_number": "", "document_date": "2026-10-06", "currency": "CHF", "total_gross": 127.05, "total_net": 117.55,
+            "supplier_country": "CH", "vat_lines": [{"rate": 8.1, "base": 117.55, "amount": 9.50}], "payment_status": "unknown",
+            "confidence": {"total_gross": 0.99, "document_date": 0.99}}
+
+
+def _iway_llm():
+    # iWay Gutschrift 4643983: -24.15 + MwSt -1.95 = -26.10 (QR-Teil mit negativem Betrag)
+    return {"is_receipt": True, "document_type": "credit_note", "is_commission": True, "supplier_name": "iWay AG",
+            "document_number": "4643983", "document_date": "2026-09-30", "due_date": "2026-10-30", "currency": "CHF",
+            "total_gross": -26.10, "total_net": -24.15, "supplier_country": "CH",
+            "vat_lines": [{"rate": 8.1, "base": -24.15, "amount": -1.95}], "payment_status": "unpaid",
+            "confidence": {"total_gross": 0.99, "document_date": 0.99}}
+
+
+def test_commission_without_rule_goes_to_review(db):
+    t = db.query(Tenant).one()
+    t.commission_account_id = 289
+    d = rules.decide(db, t, group="Finance KDT", qr=None, llm=_sipcall_llm(), text="", supplier=None, rule=None)
+    assert (d.payment_mode, d.account_id, d.tax_id, d.amount) == ("credit", 289, 28, 127.05)
+    assert d.reasons == ["Provisions-Gutschrift ohne Regel, erste Buchung prüfen"] and d.auto is False
+    assert d.payment_account_id is None and d.lines == []
+
+
+def test_negative_credit_note_is_booked_positive(db):
+    t = db.query(Tenant).one()
+    t.commission_account_id = 289
+    d = rules.decide(db, t, group="Finance KDT", qr={"amount": -26.10, "currency": "CHF"}, llm=_iway_llm(), text="", supplier=None, rule=None)
+    assert d.amount == 26.10 and d.payment_mode == "credit" and d.tax_id == 28
+    assert not any("Netto" in r or "QR-Betrag" in r or "Gutschrift, manuell" in r for r in d.reasons)
+
+
+def test_commission_with_credit_rule_books_automatically(db):
+    t = db.query(Tenant).one()
+    sup = Supplier(tenant_id=t.id, display_name="Backbone Solutions AG", name_key=rules.normalize_name("Backbone Solutions AG"), ibans=[], name_variants=[])
+    db.add(sup)
+    db.flush()
+    db.add(Rule(tenant_id=t.id, supplier_id=sup.id, keywords=[], account_id=40, tax_id=3, payment_mode="open", auto_book=True))
+    credit = Rule(tenant_id=t.id, supplier_id=sup.id, keywords=[], account_id=289, tax_id=28, payment_mode="credit", auto_book=True)
+    db.add(credit)
+    db.commit()
+    db.refresh(sup)
+    # invoices keep their rule, commission credit notes get the credit rule
+    assert rules.find_rule(sup, "").payment_mode == "open"
+    assert rules.find_rule(sup, "", credit=True) is credit
+    d = rules.decide(db, t, group="Finance KDT", qr=None, llm=_sipcall_llm(), text="", supplier=sup, rule=credit)
+    assert d.reasons == [] and d.auto is True and (d.account_id, d.tax_id) == (289, 28)
+
+
+def test_learn_credit_rule(db):
+    t = db.query(Tenant).one()
+    sup = db.query(Supplier).first()
+    r = rules.learn_from_decision(db, t, sup, None, {"payment_mode": "credit", "account_id": 289, "tax_id": 28, "amount": 127.05})
+    assert r.payment_mode == "credit" and r.payment_account_id is None and r.auto_book is True

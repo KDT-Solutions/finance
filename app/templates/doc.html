@@ -71,6 +71,7 @@
           <option value="card" {{ 'selected' if dec.payment_mode == 'card' }}>bezahlt mit Karte</option>
           <option value="private" {{ 'selected' if dec.payment_mode == 'private' }}>bezahlt privat (Kim)</option>
           <option value="bank_paid" {{ 'selected' if dec.payment_mode == 'bank_paid' }}>bereits ab Bank bezahlt</option>
+          <option value="credit" {{ 'selected' if dec.payment_mode == 'credit' }}>Gutschrift / Provision (Debitorenrechnung)</option>
         </select>
       </label>
       <label>Zahlkonto

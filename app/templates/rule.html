@@ -20,7 +20,7 @@
   </label>
   <label>Zahlung
     <select name="payment_mode">
-      {% for v, l in [('open','offen'),('card','Karte'),('private','privat (Kim)'),('bank_paid','ab Bank bezahlt')] %}<option value="{{ v }}" {{ 'selected' if rule.payment_mode == v }}>{{ l }}</option>{% endfor %}
+      {% for v, l in [('open','offen'),('card','Karte'),('private','privat (Kim)'),('bank_paid','ab Bank bezahlt'),('credit','Gutschrift / Provision')] %}<option value="{{ v }}" {{ 'selected' if rule.payment_mode == v }}>{{ l }}</option>{% endfor %}
     </select>
   </label>
   <label>Zahlkonto

@@ -293,7 +293,7 @@ def _apply_form(db: Session, doc: Document, form) -> dict:
     dec["account_id"] = _resolve_account(doc.tenant, form.get("account_no")) if "account_no" in form else integer(form.get("account_id"))
     dec["tax_id"] = _resolve_tax(doc.tenant, form.get("tax_code")) if "tax_code" in form else integer(form.get("tax_id"))
     dec["payment_mode"] = form.get("payment_mode") or "open"
-    dec["payment_account_id"] = integer(form.get("payment_account_id")) if dec["payment_mode"] != "open" else None
+    dec["payment_account_id"] = integer(form.get("payment_account_id")) if dec["payment_mode"] not in ("open", "credit") else None
     dec["booking_text"] = (form.get("booking_text") or "").strip()[:200]
     dec["amount"] = num(form.get("amount"))
     dec["currency"] = (form.get("currency") or "CHF").upper()[:3]
@@ -337,7 +337,7 @@ async def doc_book(request: Request, doc_id: int, db: Session = Depends(get_db),
     form = await request.form()
     dec = _apply_form(db, doc, form)
     missing = [k for k in ("account_id", "amount", "doc_date") if not dec.get(k)]
-    if dec.get("payment_mode") != "open" and not dec.get("payment_account_id"):
+    if dec.get("payment_mode") not in ("open", "credit") and not dec.get("payment_account_id"):
         missing.append("payment_account_id")
     if actions.needs_chf(dec) and not dec.get("amount_chf"):
         missing.append("Betrag CHF")
@@ -705,6 +705,8 @@ async def tenant_save(request: Request, code: str, db: Session = Depends(get_db)
     t.default_tax_id = _resolve_tax(t, f.get("default_tax_code"))
     t.fx_diff_account_id = _resolve_account(t, f.get("fx_diff_account_no"))
     t.fee_account_id = _resolve_account(t, f.get("fee_account_no"))
+    if "commission_account_no" in f:
+        t.commission_account_id = _resolve_account(t, f.get("commission_account_no"))
     t.bank_account_id = integer(f.get("bank_account_id"))
     t.payment_iban = rules.normalize_iban(f.get("payment_iban")) or None
     t.payment_name = (f.get("payment_name") or "").strip()[:70] or None
