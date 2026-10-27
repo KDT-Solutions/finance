@@ -148,6 +148,18 @@ def process_document(db: Session, z: ZammadClient | None, doc: Document) -> None
         iban = (qr or {}).get("iban") or llm.get("supplier_iban") or ""
         uid = llm.get("supplier_uid") or (qr or {}).get("billing", {}).get("uid", "")
         supplier, how = rules.match_supplier(db, tenant.id, iban=iban, uid=uid, name=name)
+        ai = None
+        if supplier is None and name:
+            # IBAN, UID and name found nothing: let the model pick among the most similar known suppliers
+            # (brand vs. legal name, e.g. "Backbone Solutions AG (sipcall.ch)" = "sipcall by Backbone Solutions AG")
+            candidates = rules.supplier_candidates(db, tenant.id, name)
+            choice = extract.choose_supplier({"name": name, "uid": uid, "iban": iban, "street": llm.get("supplier_street"),
+                                              "postcode": llm.get("supplier_postcode"), "city": llm.get("supplier_city"),
+                                              "country": llm.get("supplier_country"), "email_subject": doc.ticket_title}, candidates)
+            ids = {c["id"] for c in candidates}
+            if choice and choice.get("supplier_id") in ids and float(choice.get("confidence") or 0) >= 0.7:
+                supplier, how = db.get(Supplier, choice["supplier_id"]), "ai"
+                ai = {"supplier_id": supplier.id, "name": name, "uid": uid, "iban": iban, "reason": (choice.get("reason") or "")[:300]}
         if supplier is None and name:
             supplier = Supplier(tenant_id=tenant.id, display_name=name[:200], name_key=rules.normalize_name(name),
                                 uid=rules.normalize_uid(uid) or None, ibans=[rules.normalize_iban(iban)] if iban else [],
@@ -156,7 +168,7 @@ def process_document(db: Session, z: ZammadClient | None, doc: Document) -> None
             db.add(supplier)
             db.flush()
             how = "new"
-        elif supplier is not None:
+        elif supplier is not None and how != "ai":  # an AI match learns the spelling only once a person confirms it
             changed = False
             if iban and rules.normalize_iban(iban) not in [rules.normalize_iban(x) for x in (supplier.ibans or [])]:
                 supplier.ibans = [*(supplier.ibans or []), rules.normalize_iban(iban)]
@@ -176,7 +188,14 @@ def process_document(db: Session, z: ZammadClient | None, doc: Document) -> None
                                credit=rules.is_commission(llm)) if supplier else None
         doc.rule = rule
         decision = rules.decide(db, tenant, group=doc.zammad_group or "", qr=qr, llm=llm, text=text, supplier=supplier, rule=rule, matched_by=how)
+        if ai:
+            decision.reasons.append(f"Lieferant per KI zugeordnet: {supplier.display_name} ({ai['reason']}), prüfen")
+            decision.auto = False
+            # the decision carries the chosen supplier's name, else booking would rename it to the spelling on the document
+            decision.supplier_name = supplier.display_name
         doc.decision = decision.to_dict()
+        if ai:
+            doc.decision = {**doc.decision, "ai_supplier": ai}
         doc.state = "extracted"
         db.commit()
 
@@ -237,7 +256,9 @@ def attach_credit_pdf(client: bx.BexioClient, doc: Document, invoice_id, pdf: by
         file_id = str(f.get("uuid") or f.get("id") or "") or None
         me = client.me()
         user = " ".join(x for x in (me.get("firstname"), me.get("lastname")) if x) or me.get("email") or "finance"
-        client.add_invoice_comment(int(invoice_id), f"Beleg: {doc.filename} (bexio Dateien, ID {file_id}), Ticket#{doc.zammad_ticket_number or '-'}",
+        link = f"{get_settings().public_base_url.rstrip('/')}/docs/{doc.id}/pdf"
+        client.add_invoice_comment(int(invoice_id), f"Beleg: {link} ({doc.filename}, auch in bexio Dateien, ID {file_id}), "
+                                                    f"Ticket#{doc.zammad_ticket_number or '-'}",
                                    me.get("id") or doc.tenant.bexio_user_id, user)
         return file_id
     except Exception as e:  # noqa: BLE001

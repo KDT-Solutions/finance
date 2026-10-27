@@ -108,3 +108,47 @@ def _json_from_text(text: str) -> dict | None:
     except json.JSONDecodeError:
         return None
     return data if isinstance(data, dict) and "is_receipt" in data else None
+
+
+# --- supplier choice ----------------------------------------------------------------------
+SUPPLIER_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "supplier_id": {"type": ["integer", "null"], "description": "id of the matching known supplier, null if none of them is the issuer"},
+        "confidence": {"type": "number", "description": "0..1"},
+        "reason": {"type": "string", "description": "short reason in German, e.g. 'gleiche Adresse und UID, sipcall ist Marke der Backbone Solutions AG'"},
+    },
+    "required": ["supplier_id", "confidence", "reason"],
+}
+
+
+def choose_supplier(document: dict, candidates: list[dict]) -> dict | None:
+    """Which of the known suppliers issued the document? Only asked when IBAN, UID and name found nothing.
+    Returns {"supplier_id", "confidence", "reason"} or None (no answer / API error)."""
+    import json
+
+    import anthropic
+
+    s = get_settings()
+    if not candidates or not s.anthropic_api_key:
+        return None
+    text = ("Issuer as read from a supplier document (invoice, receipt or credit note):\n" + json.dumps(document, ensure_ascii=False)
+            + "\n\nKnown suppliers of this company (id, name, other spellings, address, UID):\n" + json.dumps(candidates, ensure_ascii=False)
+            + "\n\nIs one of the known suppliers the same company as the issuer (brand vs. legal name, old name, different spelling, "
+              "same address or UID)? Only pick one if you are sure, otherwise supplier_id null. "
+              "Answer by calling the choose_supplier tool exactly once.")
+    try:
+        client = anthropic.Anthropic(api_key=s.anthropic_api_key)
+        resp = client.messages.create(
+            model=s.anthropic_model, max_tokens=400,
+            tools=[{"name": "choose_supplier", "description": "Record the chosen supplier.", "input_schema": SUPPLIER_SCHEMA}],
+            tool_choice={"type": "auto", "disable_parallel_tool_use": True},
+            messages=[{"role": "user", "content": text}],
+        )
+    except Exception:  # noqa: BLE001
+        log.exception("supplier choice failed")
+        return None
+    for block in resp.content:
+        if block.type == "tool_use" and block.name == "choose_supplier":
+            return dict(block.input)
+    return None

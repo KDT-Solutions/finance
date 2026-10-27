@@ -55,6 +55,12 @@ def book_with_decision(db: Session, z: ZammadClient | None, doc: Document, dec: 
         db.commit()
         return out
     out["booked"] = doc.state == "booked"
+    ai = dec.get("ai_supplier") or {}
+    if out["booked"] and doc.supplier and ai.get("supplier_id") == doc.supplier.id:
+        # the AI match is confirmed by booking: the fixed matching (IBAN, UID, name) finds this supplier next time
+        rules.learn_supplier_identity(doc.supplier, name=ai.get("name") or "", uid=ai.get("uid") or "", iban=ai.get("iban") or "")
+        audit.log(db, "supplier.ai_confirmed", tenant_id=doc.tenant_id, actor=actor, entity="supplier", entity_id=doc.supplier.id, details=ai)
+        db.commit()
     if out["booked"] and remember and doc.supplier:
         same = doc.rule if (doc.rule and (doc.rule.keywords or []) == keywords) else None
         rule = rules.learn_from_decision(db, doc.tenant, doc.supplier, same, dec, keywords=keywords, source="review")
