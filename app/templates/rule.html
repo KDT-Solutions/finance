@@ -33,5 +33,5 @@
   <label class="check"><input type="checkbox" name="active" value="1" {{ 'checked' if rule.active }}> aktiv</label>
   <div class="actions wide"><button class="primary">Speichern</button> <a class="btn" href="/rules?tenant={{ t.code }}">Zurück</a></div>
 </form>
-<p class="muted">Treffer {{ rule.hits }} · Quelle {{ rule.learned_from }}{% if rule.last_corrected_at %} · zuletzt korrigiert {{ rule.last_corrected_at.strftime('%d.%m.%Y') }}{% endif %}</p>
+<p class="muted">Treffer {{ rule.hits }} · Quelle {{ rule.learned_from }}{% if rule.last_corrected_at %} · zuletzt korrigiert {{ rule.last_corrected_at|chdate }}{% endif %}</p>
 {% endblock %}

@@ -34,7 +34,7 @@
 {% for d in docs %}{% set dec = d.decision or {} %}
 <tr class="row" data-href="/docs/{{ d.id }}">
   <td data-label="Mandant">{{ d.tenant.code }}</td>
-  <td data-label="Eingang">{{ d.received_at.strftime('%d.%m.%y') }}</td>
+  <td data-label="Eingang">{{ d.received_at|chdate }}</td>
   <td data-label="Ticket">{% if d.zammad_ticket_number %}#{{ d.zammad_ticket_number }}{% else %}Upload{% endif %}</td>
   <td data-label="Lieferant"><a href="/docs/{{ d.id }}">{{ dec.get('supplier_name') or d.filename }}</a></td>
   <td class="r" data-label="Betrag">{% if dec.get('amount') %}{{ dec.get('currency','CHF') }} {{ '%.2f'|format(dec.amount) }}{% endif %}</td>
