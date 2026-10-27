@@ -94,3 +94,34 @@ def test_lists_have_open_button_and_swiss_date(client):
         assert "26.10.2026" in r.text and "2026-10-26</td>" not in r.text
         # the row itself is not clickable, typing into the CHF field must not navigate
         assert f'data-href="/docs/{doc_id}"' not in r.text
+
+
+def _book_form(doc_id, Session, amount, lines):
+    d = Session().get(Document, doc_id)
+    form = {"csrf": "tok", "supplier_name": "Software Ltd", "doc_date": "2026-10-26", "amount": amount, "currency": "CHF",
+            "account_no": "6570", "tax_code": "VIM", "payment_mode": "card", "payment_account_id": str(d.decision["payment_account_id"]),
+            "line_title": [l[0] for l in lines], "line_amount": [l[1] for l in lines], "line_account_no": ["" for _ in lines],
+            "line_tax_code": [l[2] for l in lines]}
+    return form
+
+
+def test_doc_page_books_positions(client, monkeypatch):
+    c, Session, doc_id = client
+    r = c.get(f"/docs/{doc_id}")
+    assert r.text.count('name="line_amount"') == 2  # two empty rows to add positions
+    form = _book_form(doc_id, Session, "54.75", [("MWST 8.1%", "32.42", "VIM"), ("MWST 2.6%", "22.33", "VIM"), ("", "", "")])
+    r = c.post(f"/docs/{doc_id}/book", data=form, follow_redirects=False)
+    assert r.status_code == 303
+    doc = Session().get(Document, doc_id)
+    assert doc.state == "booked"
+    assert [ln["amount"] for ln in doc.decision["lines"]] == [32.42, 22.33]
+    assert [e["amount"] for e in doc.booking.payload["entries"]] == [32.42, 22.33]
+
+
+def test_doc_page_rejects_positions_not_matching_amount(client):
+    c, Session, doc_id = client
+    form = _book_form(doc_id, Session, "60.00", [("A", "32.42", "VIM"), ("B", "22.33", "VIM")])
+    c.post(f"/docs/{doc_id}/book", data=form, follow_redirects=False)
+    doc = Session().get(Document, doc_id)
+    assert doc.state == "needs_review" and "Positionen ergeben 54.75 statt 60.00" in doc.review_reason
+    assert FakeBexio.entries == []

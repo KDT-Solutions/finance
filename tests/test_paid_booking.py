@@ -145,3 +145,28 @@ def test_foreign_card_document_lands_in_needs_chf(env, monkeypatch):
     pipeline.process_document(db, None, doc)
     assert doc.state == "needs_chf" and FakeBexio.entries == []
     assert doc.review_reason == "CHF-Betrag fehlt (USD 49.75 bezahlt)"
+
+
+LINES = [{"title": "MWST 8.1%", "amount": 32.40, "account_id": None, "tax_id": 7}, {"title": "MWST 2.6%", "amount": 22.33, "account_id": None, "tax_id": 8}]
+
+
+def test_card_booking_with_positions_is_compound(env, monkeypatch):
+    db, doc, dec = env
+    sent = {}
+    orig = FakeBexio.create_manual_entry
+
+    def capture(self, date, reference_nr, entries):
+        sent["entries"] = entries
+        return orig(self, date, reference_nr, entries)
+
+    monkeypatch.setattr(FakeBexio, "create_manual_entry", capture)
+    out = actions.book_with_decision(db, None, doc, {**dec, "amount": 54.73, "lines": LINES}, remember=False, keywords=[], actor="test")
+    assert out["booked"]
+    assert [(e["amount"], e["tax_id"], e["debit_account_id"]) for e in sent["entries"]] == [(32.40, 7, 170), (22.33, 8, 170)]
+
+
+def test_positions_must_add_up(env):
+    db, doc, dec = env
+    out = actions.book_with_decision(db, None, doc, {**dec, "amount": 60.00, "lines": LINES}, remember=False, keywords=[], actor="test")
+    assert not out["booked"] and "Positionen ergeben 54.73, Betrag ist 60.00" in doc.last_error
+    assert FakeBexio.entries == []

@@ -124,6 +124,9 @@ def _doc_dict(d: Document, full: bool = False) -> dict:
         "document_number": dec.get("document_number"), "payment_mode": dec.get("payment_mode"),
         "account_no": pipeline._master(d.tenant, "accounts", dec.get("account_id")).get("no"),
         "tax_code": pipeline._master(d.tenant, "taxes", dec.get("tax_id")).get("code"),
+        "lines": [{"title": ln.get("title"), "amount": ln.get("amount"),
+                   "account_no": pipeline._master(d.tenant, "accounts", ln.get("account_id")).get("no"),
+                   "tax_code": pipeline._master(d.tenant, "taxes", ln.get("tax_id")).get("code")} for ln in dec.get("lines") or []],
         "review_reason": d.review_reason, "last_error": d.last_error, "reasons": dec.get("reasons"),
         "url": f"{get_settings().public_base_url}/docs/{d.id}",
     }
@@ -300,12 +303,16 @@ def t_get_doc(db, a):
 
 @tool("book_document", "Beleg buchen: Felder überschreiben (Konto per Nummer, Steuer per Code, Zahlkonto per Label) und in bexio verbuchen. "
       "payment_mode open = offene Kreditorenrechnung, card/private/bank_paid = bezahlt (manuelle Buchung gegen Zahlkonto). "
+      "lines = Positionen (z.B. je MWST-Satz), Summe muss amount ergeben; [] bucht einzeilig. "
       "Bezahlt in Fremdwährung: amount_chf = belasteter CHF-Betrag laut Abrechnung, gebucht wird in CHF. "
       "remember=true merkt sich die Entscheidung als Regel für den Lieferanten.",
       {"id": {"type": "integer"}, "supplier_name": {"type": "string"}, "account_no": {"type": "string"}, "tax_code": {"type": "string"},
        "payment_mode": {"type": "string", "enum": ["open", "card", "private", "bank_paid"]}, "payment_account": {"type": "string"},
        "booking_text": {"type": "string"}, "amount": {"type": "number"}, "currency": {"type": "string"},
-       "amount_chf": {"type": "number", "description": "nur bezahlt in Fremdwährung: belasteter Betrag in CHF laut Karten-/Bankabrechnung"}, "doc_date": {"type": "string"},
+       "amount_chf": {"type": "number", "description": "nur bezahlt in Fremdwährung: belasteter Betrag in CHF laut Karten-/Bankabrechnung"},
+       "lines": {"type": "array", "description": "Positionen brutto; account_no leer = Aufwandkonto des Belegs",
+                 "items": {"type": "object", "properties": {"title": {"type": "string"}, "amount": {"type": "number"},
+                                                            "account_no": {"type": "string"}, "tax_code": {"type": "string"}}, "required": ["amount"]}}, "doc_date": {"type": "string"},
        "due_date": {"type": "string"}, "document_number": {"type": "string"}, "exchange_rate": {"type": "number", "description": "Kurs in CHF je Einheit Fremdwährung (optional, sonst BAZG-Tageskurs zum Belegdatum)"},
        "already_paid": {"type": "boolean", "default": False, "description": "offene Rechnung ist schon bezahlt: Ticket sofort schliessen, Ausgleich über Banksync (wird auch erkannt, wenn ein Agent 'bezahlt' ins Ticket geschrieben hat)"},
        "remember": {"type": "boolean", "default": False},
@@ -334,6 +341,18 @@ def t_book(db, a):
     for k in ("booking_text", "amount", "currency", "amount_chf", "doc_date", "due_date", "document_number", "exchange_rate", "already_paid"):
         if k in a and a[k] is not None:
             dec[k] = a[k]
+    if "lines" in a:
+        lines = []
+        for ln in a.get("lines") or []:
+            acc = _account(t, ln["account_no"]) if ln.get("account_no") else None
+            if ln.get("account_no") and not acc:
+                raise ToolError(f"Konto {ln['account_no']} unbekannt")
+            tx = _tax(t, ln["tax_code"]) if ln.get("tax_code") else None
+            if ln.get("tax_code") and not tx:
+                raise ToolError(f"Steuercode {ln['tax_code']} unbekannt")
+            lines.append({"title": (ln.get("title") or "")[:80], "amount": round(float(ln["amount"]), 2),
+                          "account_id": acc["id"] if acc else None, "tax_id": tx["id"] if tx else None})
+        dec["lines"] = lines if len(lines) > 1 else []
     dec["payment_mode"] = dec.get("payment_mode") or "open"
     if dec["payment_mode"] == "open":
         dec["payment_account_id"] = None
@@ -342,13 +361,17 @@ def t_book(db, a):
         missing.append("payment_account")
     if actions.needs_chf(dec) and not dec.get("amount_chf"):
         missing.append("amount_chf")
+    if dec.get("lines") and dec.get("amount") and abs(sum(ln["amount"] for ln in dec["lines"]) - float(dec["amount"])) > 0.005:
+        raise ToolError(f"Positionen ergeben {sum(ln['amount'] for ln in dec['lines']):.2f}, Betrag ist {float(dec['amount']):.2f}")
     if not dec.get("supplier_name") and not d.supplier:
         missing.append("supplier_name")
     summary = {
         "document": d.id, "tenant": t.code, "supplier": dec.get("supplier_name") or (d.supplier.display_name if d.supplier else None),
         "amount": dec.get("amount"), "currency": dec.get("currency", "CHF"), "doc_date": dec.get("doc_date"), "due_date": dec.get("due_date"),
         "account_no": pipeline._master(t, "accounts", dec.get("account_id")).get("no"), "tax_code": pipeline._master(t, "taxes", dec.get("tax_id")).get("code"),
-        "payment_mode": dec["payment_mode"], "payment_account_id": dec.get("payment_account_id"), "amount_chf": dec.get("amount_chf"), "remember": bool(a.get("remember")),
+        "payment_mode": dec["payment_mode"], "payment_account_id": dec.get("payment_account_id"), "amount_chf": dec.get("amount_chf"),
+        "lines": [{"amount": ln["amount"], "account_no": pipeline._master(t, "accounts", ln.get("account_id")).get("no"),
+                   "tax_code": pipeline._master(t, "taxes", ln.get("tax_id")).get("code")} for ln in dec.get("lines") or []], "remember": bool(a.get("remember")),
     }
     if missing:
         raise ToolError("Felder fehlen: " + ", ".join(missing))

@@ -222,6 +222,24 @@ def _one(res) -> dict:
     return res if isinstance(res, dict) else {}
 
 
+def _positions(dec: dict, amount: float) -> list[dict] | None:
+    """Positions of the decision (several VAT rates); None for a single line. They must add up to the amount."""
+    lines = [ln for ln in (dec.get("lines") or []) if ln.get("amount")]
+    if len(lines) < 2:
+        return None
+    total = round(sum(float(ln["amount"]) for ln in lines), 2)
+    if abs(total - amount) > 0.005:
+        raise RuntimeError(f"Positionen ergeben {total:.2f}, Betrag ist {amount:.2f}")
+    return lines
+
+
+def _positions_note(tenant: Tenant, lines: list[dict] | None) -> str:
+    if not lines:
+        return ""
+    parts = [f"{float(ln['amount']):.2f} {_master(tenant, 'taxes', ln.get('tax_id')).get('code', 'ohne Steuer')}" for ln in lines]
+    return "\nPositionen: " + ", ".join(parts)
+
+
 def _master(tenant: Tenant, kind: str, id_: int | None) -> dict:
     for row in (tenant.master_data or {}).get(kind, []):
         if row.get("id") == id_:
@@ -309,6 +327,7 @@ def book(db: Session, z: ZammadClient | None, doc: Document, *, actor: str = "sy
         if amount <= 0:
             raise RuntimeError("Betrag fehlt oder 0")
         mode = dec.get("payment_mode") or "open"
+        lines = _positions(dec, amount)
         desc = (dec.get("booking_text") or dec.get("supplier_name") or "")[:200]
         docno = dec.get("document_number") or ""
         booking = Booking(document_id=doc.id, tenant_id=tenant.id, amount=amount, currency=dec.get("currency") or "CHF")
@@ -330,7 +349,7 @@ def book(db: Session, z: ZammadClient | None, doc: Document, *, actor: str = "sy
                     bill_date=dec.get("doc_date") or now().date().isoformat(), due_date=dec.get("due_date") or "",
                     currency=dec.get("currency") or "CHF", amount_gross=amount, account_id=int(dec["account_id"]),
                     tax_id=dec.get("tax_id"), text=desc, attachment_ids=[file_id], qr=qr, bank_account_id=tenant.bank_account_id,
-                    exchange_rate=rate, supplier_iban=(llm.get("supplier_iban") or ""),
+                    exchange_rate=rate, supplier_iban=(llm.get("supplier_iban") or ""), lines=lines,
                 ))
                 bill_id = str(created.get("id"))
                 try:
@@ -353,6 +372,7 @@ def book(db: Session, z: ZammadClient | None, doc: Document, *, actor: str = "sy
             if already_paid:
                 note += "\nBereits bezahlt, Ausgleich über den Banksync. Ticket geschlossen."
                 booking.paid_at = now()
+            note += _positions_note(tenant, lines)
         else:
             pa = db.get(PaymentAccount, dec.get("payment_account_id")) if dec.get("payment_account_id") else None
             if not pa or not pa.bexio_account_id:
@@ -360,19 +380,24 @@ def book(db: Session, z: ZammadClient | None, doc: Document, *, actor: str = "sy
             tax = _master(tenant, "taxes", dec.get("tax_id"))
             # paid in a foreign currency: the payment account was debited in CHF, book that amount
             original = ""
+            if booking.currency.upper() != "CHF" and lines:
+                raise RuntimeError("Positionen bei bezahltem Beleg in Fremdwährung werden nicht unterstützt")
             if booking.currency.upper() != "CHF":
                 amount_chf = float(dec.get("amount_chf") or 0)
                 if amount_chf <= 0:
                     raise RuntimeError(f"CHF-Betrag fehlt (bezahlt in {booking.currency})")
                 original = f"{booking.currency.upper()} {amount:.2f}"
                 booking.amount, booking.currency, amount = amount_chf, "CHF", amount_chf
-            lines = bx.build_manual_entry_lines(amount=amount, debit_account_id=int(dec["account_id"]), credit_account_id=pa.bexio_account_id,
-                                                tax_id=dec.get("tax_id"), tax_account_id=int(dec["account_id"]),
-                                                description=" ".join(x for x in (desc, docno, f"({original})" if original else "") if x))
-            payload = {"date": dec.get("doc_date") or now().date().isoformat(), "reference_nr": docno or doc.filename, "entries": lines}
+            text = " ".join(x for x in (desc, docno, f"({original})" if original else "") if x)
+            if lines:
+                entries = bx.build_manual_entry_split(lines=lines, debit_account_id=int(dec["account_id"]), credit_account_id=pa.bexio_account_id, description=text)
+            else:
+                entries = bx.build_manual_entry_lines(amount=amount, debit_account_id=int(dec["account_id"]), credit_account_id=pa.bexio_account_id,
+                                                      tax_id=dec.get("tax_id"), tax_account_id=int(dec["account_id"]), description=text)
+            payload = {"date": dec.get("doc_date") or now().date().isoformat(), "reference_nr": docno or doc.filename, "entries": entries}
             if original:
                 payload["original"] = original
-            created = client.create_manual_entry(payload["date"], payload["reference_nr"], lines)
+            created = client.create_manual_entry(payload["date"], payload["reference_nr"], entries)
             # from here on the entry exists in bexio: nothing below may fail the booking, or it is lost locally
             entry = _one(created)
             entry_id = entry.get("id")
@@ -388,6 +413,7 @@ def book(db: Session, z: ZammadClient | None, doc: Document, *, actor: str = "sy
             f = _one(file_info)
             booking.bexio_file_id = str(f.get("uuid") or f.get("id") or "") or None
             note = f"finance: Beleg gebucht (bezahlt).\nLieferant: {dec.get('supplier_name')}\nBetrag: {booking.currency} {amount:.2f}{f' ({original})' if original else ''}\nKonto: {_master(tenant, 'accounts', dec.get('account_id')).get('no', dec.get('account_id'))} an {pa.label}, Steuercode: {tax.get('code', dec.get('tax_id') or '-')}\nbexio Buchung-ID: {entry_id}"
+            note += _positions_note(tenant, lines)
             close_ticket = True
 
         db.add(booking)

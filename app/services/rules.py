@@ -144,6 +144,8 @@ class Decision:
     move_to_topay: bool = False
     # paid in a foreign currency: booked in CHF once the amount from the card/bank statement is entered
     needs_chf: bool = False
+    # several positions (one per VAT rate): [{title, amount (gross), account_id (None = main account), tax_id}]
+    lines: list[dict] = field(default_factory=list)
     reasons: list[str] = field(default_factory=list)
     auto: bool = False
     matched_by: str = ""
@@ -209,6 +211,42 @@ def pick_tax(tenant: Tenant, account_id: int | None, rate: float) -> dict | None
         if t.get("type") == want:
             return t
     return taxes[0] if taxes else None
+
+
+def split_by_vat(tenant: Tenant, account_id: int | None, llm: dict, total: float | None) -> tuple[list[dict], list[str]]:
+    """Document with more than one VAT rate (e.g. 8.1% and 2.6%): one gross position per rate from the VAT summary,
+    each with its own tax code. Rounding up to 5 Rappen goes to the largest position. Returns ([], []) for one rate."""
+    per_rate: dict[float, float] = {}
+    for v in llm.get("vat_lines") or []:
+        try:
+            rate = round(float(v.get("rate") or 0), 2)
+        except (TypeError, ValueError):
+            continue
+        vat = _fmt_amount(v.get("amount")) or 0.0
+        base = _fmt_amount(v.get("base"))
+        if base is None and rate > 0 and vat:
+            base = round(vat * 100 / rate, 2)
+        if not base:
+            continue
+        per_rate[rate] = round(per_rate.get(rate, 0.0) + base + vat, 2)
+    if len(per_rate) < 2 or not total:
+        return [], []
+    reasons: list[str] = []
+    lines = []
+    for rate, gross in sorted(per_rate.items(), key=lambda kv: -kv[1]):
+        tax = pick_tax(tenant, account_id, rate) if rate > 0 else None
+        if rate > 0 and not tax:
+            reasons.append(f"Kein Steuercode für {rate:g}% in den Stammdaten")
+        lines.append({"title": f"MWST {rate:g}%" if rate > 0 else "ohne MWST", "amount": gross, "account_id": None, "tax_id": tax["id"] if tax else None})
+    diff = round(total - sum(ln["amount"] for ln in lines), 2)
+    if abs(diff) <= 0.05:
+        lines[0]["amount"] = round(lines[0]["amount"] + diff, 2)
+    elif diff > 0:
+        lines.append({"title": "ohne MWST", "amount": diff, "account_id": None, "tax_id": None})
+        reasons.append(f"Positionen ohne MWST {diff:.2f}, prüfen")
+    else:
+        reasons.append(f"Aufteilung nach MWST-Sätzen ergibt {-diff:.2f} mehr als das Total")
+    return lines, reasons
 
 
 def decide(db: Session, tenant: Tenant, *, group: str, qr: dict | None, llm: dict, text: str,
@@ -342,6 +380,15 @@ def decide(db: Session, tenant: Tenant, *, group: str, qr: dict | None, llm: dic
         d.tax_id = None
         if not foreign and (llm.get("vat_lines") or llm.get("total_net")) and d.amount and _fmt_amount(llm.get("total_net")) == d.amount:
             reasons.append("Keine MWST auf dem Beleg ausgewiesen")
+
+    # --- several VAT rates on one document: one position per rate -------------------------
+    if not foreign:
+        lines, split_reasons = split_by_vat(tenant, d.account_id, llm, d.amount)
+        if lines:
+            d.lines = lines
+            rates = ", ".join(ln["title"].removeprefix("MWST ") for ln in lines)
+            reasons.append(f"Mehrere MWST-Sätze ({rates}), Aufteilung prüfen")
+            reasons.extend(split_reasons)
 
     if not d.booking_text:
         d.booking_text = (llm.get("summary") or d.supplier_name or "")[:120]
