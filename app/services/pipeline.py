@@ -229,6 +229,22 @@ def _one(res) -> dict:
     return res if isinstance(res, dict) else {}
 
 
+def attach_credit_pdf(client: bx.BexioClient, doc: Document, invoice_id, pdf: bytes) -> str | None:
+    """Commission credit note: upload the PDF to bexio files and point to it with an internal comment on the debtor
+    invoice (the API cannot attach files to debtor invoices). Never fails the booking, returns the file id or None."""
+    try:
+        f = _one(client.upload_file(doc.filename or "gutschrift.pdf", pdf))
+        file_id = str(f.get("uuid") or f.get("id") or "") or None
+        me = client.me()
+        user = " ".join(x for x in (me.get("firstname"), me.get("lastname")) if x) or me.get("email") or "finance"
+        client.add_invoice_comment(int(invoice_id), f"Beleg: {doc.filename} (bexio Dateien, ID {file_id}), Ticket#{doc.zammad_ticket_number or '-'}",
+                                   me.get("id") or doc.tenant.bexio_user_id, user)
+        return file_id
+    except Exception as e:  # noqa: BLE001
+        log.warning("credit note pdf for invoice %s not attached: %s", invoice_id, e)
+        return None
+
+
 def _positions(dec: dict, amount: float) -> list[dict] | None:
     """Positions of the decision (several VAT rates); None for a single line. They must add up to the amount."""
     lines = [ln for ln in (dec.get("lines") or []) if ln.get("amount")]
@@ -357,6 +373,7 @@ def book(db: Session, z: ZammadClient | None, doc: Document, *, actor: str = "sy
             except bx.BexioError as e:
                 log.warning("invoice %s created but not issued: %s", invoice_id, e)
             booking.kind, booking.bexio_bill_id, booking.payload, booking.response, booking.bexio_status = "credit_invoice", str(invoice_id), payload, created, status
+            booking.bexio_file_id = attach_credit_pdf(client, doc, invoice_id, pdf)
             note = (f"finance: Provisions-Gutschrift als Debitorenrechnung in bexio angelegt ({status}), Eingang über den Banksync.\n"
                     f"Partner: {dec.get('supplier_name')}\nBetrag: {booking.currency} {amount:.2f}\n"
                     f"Konto: {_master(tenant, 'accounts', dec.get('account_id')).get('no', dec.get('account_id'))}, "

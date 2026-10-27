@@ -9,7 +9,7 @@ from app import auth
 from app.config import get_settings
 from app.db import Base
 from app.main import app
-from app.models import Document, PaymentAccount, Supplier, Tenant
+from app.models import Document, PaymentAccount, Rule, Supplier, Tenant
 from app.routes import ui
 from app.services import bexio as bx
 
@@ -29,6 +29,7 @@ def client(monkeypatch, tmp_path):
     FakeBexio.entry_response, FakeBexio.file_response, FakeBexio.file_error = ENTRY, [FILE], None
     FakeBexio.entries, FakeBexio.files = [], []
     FakeBexio.invoices, FakeBexio.issued = [], []
+    FakeBexio.uploads, FakeBexio.comments, FakeBexio.contacts = [], [], []
     db = Session()
     t = Tenant(code="AAA", name="Beispiel AAA GmbH", zammad_group_paid="Finance AAA", zammad_group_topay="Finance toPay AAA",
                master_data={"accounts": [{"id": 170, "no": "6570", "name": "Informatikaufwand"}], "taxes": [{"id": 7, "code": "VIM"}]})
@@ -192,3 +193,23 @@ def test_settings_offers_reconnect_when_connected(client):
     page = c.get("/settings").text
     assert 'href="/auth/bexio/start?tenant=AAA">Neu verbinden</a>' in page or ('href="/auth/bexio/start?tenant=AAA"' in page and "Neu verbinden" in page)
     assert "/settings/tenant/AAA/disconnect" in page
+
+
+
+def test_booking_with_name_variant_keeps_supplier(client):
+    """sipcall: the decision still carries the spelling of the merged supplier; booking must not create a new one."""
+    c, Session, doc_id = client
+    db = Session()
+    d = db.get(Document, doc_id)
+    sup = d.supplier
+    sup.name_variants = ["Software Ltd (software.ch)"]
+    db.add(Rule(tenant_id=d.tenant_id, supplier_id=sup.id, keywords=[], payment_mode="open"))
+    db.commit()
+    n = db.query(Supplier).count()
+    form = _book_form(doc_id, Session, "49.75", [])
+    form.update({"supplier_name": "Software Ltd (software.ch)", "amount_chf": "45.30", "currency": "USD"})
+    c.post(f"/docs/{doc_id}/book", data=form, follow_redirects=False)
+    db = Session()
+    doc = db.get(Document, doc_id)
+    assert doc.state == "booked" and doc.supplier_id == sup.id
+    assert db.query(Supplier).count() == n and FakeBexio.contacts == []  # no new supplier, no new bexio contact

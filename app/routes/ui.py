@@ -314,7 +314,8 @@ def _apply_form(db: Session, doc: Document, form) -> dict:
         dec["lines"] = rules.with_net(doc.tenant, lines) if len(lines) > 1 else []
     # supplier rename / merge
     if dec["supplier_name"] and (not doc.supplier or rules.normalize_name(dec["supplier_name"]) != doc.supplier.name_key):
-        existing = db.query(Supplier).filter(Supplier.tenant_id == doc.tenant_id, Supplier.name_key == rules.normalize_name(dec["supplier_name"])).first()
+        # also name variants: a merged supplier keeps the other spelling as variant (sipcall: no new supplier on booking)
+        existing = rules.find_supplier_by_name(db, doc.tenant_id, dec["supplier_name"])
         if existing:
             doc.supplier = existing
         elif doc.supplier and not doc.supplier.rules and db.query(Document).filter(Document.supplier_id == doc.supplier.id).count() <= 1:
