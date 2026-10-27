@@ -30,7 +30,7 @@ def client(monkeypatch, tmp_path):
     FakeBexio.entries, FakeBexio.files = [], []
     db = Session()
     t = Tenant(code="AAA", name="Beispiel AAA GmbH", zammad_group_paid="Finance AAA", zammad_group_topay="Finance toPay AAA",
-               master_data={"accounts": [{"id": 170, "no": "6570"}], "taxes": [{"id": 7, "code": "VIM"}]})
+               master_data={"accounts": [{"id": 170, "no": "6570", "name": "Informatikaufwand"}], "taxes": [{"id": 7, "code": "VIM"}]})
     db.add(t)
     db.flush()
     pa = PaymentAccount(tenant_id=t.id, label="Visa", kind="card", card_last4="3156", bexio_account_id=99)
@@ -125,3 +125,20 @@ def test_doc_page_rejects_positions_not_matching_amount(client):
     doc = Session().get(Document, doc_id)
     assert doc.state == "needs_review" and "Positionen ergeben 54.75 statt 60.00" in doc.review_reason
     assert FakeBexio.entries == []
+
+
+
+def test_account_fields_show_number_and_name(client):
+    c, Session, doc_id = client
+    r = c.get(f"/docs/{doc_id}")
+    assert 'name="account_no" list="dl-accounts" value="6570 Informatikaufwand"' in r.text
+    assert '<option value="6570 Informatikaufwand"></option>' in r.text
+    assert 'placeholder="6570 Informatikaufwand"' in r.text
+    # the value with the name still resolves to the account when booking
+    form = _book_form(doc_id, Session, "49.75", [])
+    form["account_no"] = "6570 Informatikaufwand"
+    form["amount_chf"] = "45.30"
+    form["currency"] = "USD"
+    c.post(f"/docs/{doc_id}/book", data=form, follow_redirects=False)
+    doc = Session().get(Document, doc_id)
+    assert doc.state == "booked" and doc.decision["account_id"] == 170
