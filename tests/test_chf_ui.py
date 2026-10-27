@@ -30,6 +30,7 @@ def client(monkeypatch, tmp_path):
     FakeBexio.entries, FakeBexio.files = [], []
     FakeBexio.invoices, FakeBexio.issued = [], []
     FakeBexio.uploads, FakeBexio.comments, FakeBexio.contacts = [], [], []
+    FakeBexio.existing = set()
     db = Session()
     t = Tenant(code="AAA", name="Beispiel AAA GmbH", zammad_group_paid="Finance AAA", zammad_group_topay="Finance toPay AAA",
                master_data={"accounts": [{"id": 170, "no": "6570", "name": "Informatikaufwand"}], "taxes": [{"id": 7, "code": "VIM"}]})
@@ -213,3 +214,14 @@ def test_booking_with_name_variant_keeps_supplier(client):
     doc = db.get(Document, doc_id)
     assert doc.state == "booked" and doc.supplier_id == sup.id
     assert db.query(Supplier).count() == n and FakeBexio.contacts == []  # no new supplier, no new bexio contact
+
+
+def test_doc_page_reset_booking(client):
+    c, Session, doc_id = client
+    form = _book_form(doc_id, Session, "127.05", [])
+    form.update({"payment_mode": "credit", "payment_account_id": "", "currency": "CHF"})
+    c.post(f"/docs/{doc_id}/book", data=form, follow_redirects=False)
+    assert "Buchung zurücksetzen" in c.get(f"/docs/{doc_id}").text
+    c.post(f"/docs/{doc_id}/reset", data={"csrf": "tok"}, follow_redirects=False)
+    doc = Session().get(Document, doc_id)
+    assert doc.state == "needs_review" and doc.booking is None

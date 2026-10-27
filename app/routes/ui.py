@@ -389,6 +389,22 @@ async def doc_skip(request: Request, doc_id: int, db: Session = Depends(get_db),
     return RedirectResponse(f"/todo?tenant={doc.tenant.code}", status_code=303)
 
 
+@router.post("/docs/{doc_id}/reset")
+def doc_reset(doc_id: int, db: Session = Depends(get_db), sess: dict = Depends(auth.require_csrf)):
+    doc = db.get(Document, doc_id)
+    if not doc:
+        raise HTTPException(404)
+    client = bx.BexioClient(db, doc.tenant)
+    try:
+        actions.reset_booking(db, client, doc, actor=sess["u"])
+    except ValueError as e:
+        doc.last_error = str(e)
+        db.commit()
+    finally:
+        client.close()
+    return RedirectResponse(f"/docs/{doc.id}", status_code=303)
+
+
 @router.post("/docs/{doc_id}/restore")
 def doc_restore(doc_id: int, db: Session = Depends(get_db), sess: dict = Depends(auth.require_csrf)):
     doc = db.get(Document, doc_id)

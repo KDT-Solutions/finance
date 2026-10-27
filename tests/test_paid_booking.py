@@ -34,6 +34,11 @@ class FakeBexio:
         FakeBexio.invoices.append(payload)
         return {"id": 1720, "document_nr": "RE-01720", "kb_item_status_id": 7}
 
+    def get(self, path, **params):
+        if path in FakeBexio.existing:
+            return {"id": 1}
+        raise bx.BexioError(404, "not found", path)
+
     def search_contacts(self, name):
         return []
 
@@ -76,6 +81,7 @@ def env(monkeypatch, tmp_path):
     FakeBexio.entries, FakeBexio.files = [], []
     FakeBexio.invoices, FakeBexio.issued = [], []
     FakeBexio.uploads, FakeBexio.comments, FakeBexio.contacts = [], [], []
+    FakeBexio.existing = set()
     t = Tenant(code="AAA", name="Beispiel AAA GmbH", zammad_group_paid="Finance AAA", zammad_group_topay="Finance toPay AAA",
                master_data={"accounts": [{"id": 170, "no": "4200"}], "taxes": [{"id": 7, "code": "VIM"}]})
     db.add(t)
@@ -270,3 +276,21 @@ def test_ai_unsure_creates_new_supplier_as_before(env, monkeypatch):
     sip, _ = _sipcall_setup(db, doc, monkeypatch, lambda s: {"supplier_id": s.id, "confidence": 0.4, "reason": "unsicher"})
     assert doc.supplier_id != sip.id and doc.decision["matched_by"] == "new"
     assert not any("KI" in r for r in doc.decision["reasons"])
+
+
+
+def test_reset_booking_after_invoice_deleted_in_bexio(env):
+    """sipcall 1733 went to the wrong contact and was deleted in bexio: back to review, book again."""
+    db, doc, dec = env
+    credit = {**dec, "payment_mode": "credit", "payment_account_id": None, "amount": 127.05}
+    assert actions.book_with_decision(db, None, doc, credit, remember=False, keywords=[], actor="test")["booked"]
+    client = FakeBexio(db, doc.tenant)
+    FakeBexio.existing = {"/2.0/kb_invoice/1720"}
+    with pytest.raises(ValueError, match="existiert noch"):
+        actions.reset_booking(db, client, doc, actor="test")
+    assert doc.state == "booked"
+    FakeBexio.existing = set()
+    assert actions.reset_booking(db, client, doc, actor="test") == "needs_review"
+    assert doc.booking is None and "zurückgesetzt" in doc.review_reason
+    out = actions.book_with_decision(db, None, doc, credit, remember=False, keywords=[], actor="test")
+    assert out["booked"] and len(FakeBexio.invoices) == 2 and doc.booking.bexio_bill_id == "1720"
