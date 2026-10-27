@@ -63,3 +63,13 @@ def test_customs_bill_is_net_like_the_manual_booking():
                               tax_id=9, text="Verzollung", attachment_ids=[], qr=None, lines=lines)
     assert p["item_net"] is True and p["amount_calc"] == 197.28
     assert [(li["amount"], li["tax_id"], li["booking_account_id"]) for li in p["line_items"]] == [(173.00, 9, 170), (22.46, 35, 170)]
+
+
+
+def test_invoice_payload_for_commission():
+    p = bx.build_invoice_payload(contact_id=20, user_id=1, title="Gutschrift 4643983", doc_date="2026-09-30", due_date="2026-10-30",
+                                 amount_gross=26.1, account_id=289, tax_id=28, text="Provision iWay 4643983", reference="4643983")
+    assert (p["mwst_type"], p["mwst_is_net"], p["contact_id"], p["user_id"]) == (0, False, 20, 1)
+    assert p["positions"] == [{"type": "KbPositionCustom", "amount": "1", "unit_price": "26.10", "account_id": 289, "tax_id": 28,
+                               "text": "Provision iWay 4643983"}]
+    assert (p["is_valid_from"], p["is_valid_to"], p["reference"]) == ("2026-09-30", "2026-10-30", "4643983")

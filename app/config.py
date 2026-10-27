@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     bexio_userinfo_url: str = "https://auth.bexio.com/realms/bexio/protocol/openid-connect/userinfo"
     bexio_api_url: str = "https://api.bexio.com"
     # company_profile: liefert company_id/company_name in /userinfo (Firmenpruefung)
-    bexio_scopes: str = "openid profile company_profile offline_access accounting contact_edit file kb_bill_show bank_account_show"
+    bexio_scopes: str = "openid profile company_profile offline_access accounting contact_edit file kb_bill_show bank_account_show kb_invoice_edit"
 
     # bearer token for the MCP endpoint (/mcp); empty = endpoint disabled
     mcp_token: str = ""

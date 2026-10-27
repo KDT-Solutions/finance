@@ -38,6 +38,8 @@ class Tenant(Base):
     fx_diff_account_id: Mapped[int | None] = mapped_column(Integer)
     fee_account_id: Mapped[int | None] = mapped_column(Integer)
     default_tax_id: Mapped[int | None] = mapped_column(Integer)
+    # revenue account for commission credit notes (debtor invoice), e.g. 3681 Provisionen
+    commission_account_id: Mapped[int | None] = mapped_column(Integer)
     # bexio bank account (3.0/banking/accounts id) used as paying account on purchase bills
     bank_account_id: Mapped[int | None] = mapped_column(Integer)
     # debtor data for payment files (pain.001): IBAN of the paying bank account, name as the bank knows it
@@ -98,7 +100,7 @@ class Rule(Base):
     tax_id: Mapped[int | None] = mapped_column(Integer)
     tax_code: Mapped[str | None] = mapped_column(String(32))
     booking_text: Mapped[str | None] = mapped_column(String(200))
-    # open | card | private | bank_paid
+    # open | card | private | bank_paid | credit (commission credit note)
     payment_mode: Mapped[str] = mapped_column(String(16), default="open")
     payment_account_id: Mapped[int | None] = mapped_column(ForeignKey("payment_accounts.id"))
     amount_min: Mapped[float | None] = mapped_column(Float)
@@ -190,7 +192,7 @@ class Booking(Base):
     document_id: Mapped[int] = mapped_column(ForeignKey("documents.id"), unique=True)
     tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id"), index=True)
     tenant: Mapped[Tenant] = relationship()
-    kind: Mapped[str] = mapped_column(String(16))  # bill_open | bill_paid | entry
+    kind: Mapped[str] = mapped_column(String(16))  # bill_open | bill_paid | entry | credit_invoice
     bexio_bill_id: Mapped[str | None] = mapped_column(String(64))
     bexio_entry_id: Mapped[int | None] = mapped_column(Integer)
     bexio_file_id: Mapped[str | None] = mapped_column(String(64))

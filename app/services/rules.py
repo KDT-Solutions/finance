@@ -111,13 +111,20 @@ def match_supplier(db: Session, tenant_id: int, *, iban: str = "", uid: str = ""
     return None, ""
 
 
-def find_rule(supplier: Supplier | None, text: str) -> Rule | None:
+def is_commission(llm: dict | None) -> bool:
+    """Credit note crediting us a commission / partner provision (sipcall, iWay): booked as revenue, not as expense."""
+    llm = llm or {}
+    return bool(llm.get("is_commission")) and llm.get("document_type") in ("credit_note", "invoice", "statement", "receipt")
+
+
+def find_rule(supplier: Supplier | None, text: str, *, credit: bool = False) -> Rule | None:
+    """Rule of the supplier for this document; commission credit notes only use credit rules and vice versa."""
     if not supplier:
         return None
     text_l = (text or "").lower()
     default = None
     for r in supplier.rules:
-        if not r.active:
+        if not r.active or (r.payment_mode == "credit") != credit:
             continue
         kws = [k.lower() for k in (r.keywords or []) if k]
         if kws:
@@ -130,7 +137,7 @@ def find_rule(supplier: Supplier | None, text: str) -> Rule | None:
 
 @dataclass
 class Decision:
-    payment_mode: str = "open"  # open | card | private | bank_paid
+    payment_mode: str = "open"  # open | card | private | bank_paid | credit (commission: debtor invoice)
     payment_account_id: int | None = None
     account_id: int | None = None
     tax_id: int | None = None
@@ -185,7 +192,7 @@ def document_vat_rate(llm: dict) -> float | None:
     for v in llm.get("vat_lines") or []:
         try:
             rate = round(float(v.get("rate") or 0), 2)
-            b = float(v.get("base") or v.get("amount") or 0)
+            b = abs(float(v.get("base") or v.get("amount") or 0))
         except (TypeError, ValueError):
             continue
         if rate > 0 and b > base:
@@ -306,6 +313,42 @@ def split_by_vat(tenant: Tenant, account_id: int | None, llm: dict, total: float
     return lines, reasons
 
 
+def pick_sales_tax(tenant: Tenant, rate: float) -> dict | None:
+    """Sales tax code for the rate (UN81 for 8.1%)."""
+    for t in (tenant.master_data or {}).get("taxes", []):
+        if t.get("active", True) and t.get("type") == "sales_tax" and t.get("rate") is not None and abs(float(t["rate"]) - rate) < 0.01:
+            return t
+    return None
+
+
+def _decide_commission(tenant: Tenant, d: Decision, reasons: list[str], llm: dict, rule: Rule | None) -> Decision:
+    """Commission credit note: debtor invoice to the partner on the revenue account (rule, else tenant setting)
+    with the sales tax code of the printed rate. The first one per partner goes to review, 'remember' makes the rule."""
+    d.payment_mode = "credit"
+    if d.currency != "CHF":
+        reasons.append(f"Fremdwährung {d.currency} (Phase 1 manuell)")
+    d.account_id = (rule.account_id if rule else None) or tenant.commission_account_id
+    if not d.account_id:
+        reasons.append("Ertragskonto für Provisionen fehlt (Regel oder Einstellungen)")
+    rate = document_vat_rate(llm)
+    if rate:
+        tax = pick_sales_tax(tenant, rate)
+        d.tax_id = tax["id"] if tax else None
+        if not tax:
+            reasons.append(f"Kein Umsatzsteuercode für {rate:g}% in den Stammdaten")
+        elif rule and rule.tax_id and rule.tax_id != tax["id"]:
+            reasons.append(f"MWST {rate:g}% auf Gutschrift, Regel hat {_master(tenant, 'taxes', rule.tax_id).get('code')}")
+    else:
+        d.tax_id = rule.tax_id if rule else None
+        reasons.append("Keine MWST auf der Gutschrift ausgewiesen, Steuercode prüfen")
+    if rule is None:
+        reasons.append("Provisions-Gutschrift ohne Regel, erste Buchung prüfen")
+    d.booking_text = (rule.booking_text if rule and rule.booking_text else "") or (llm.get("summary") or d.supplier_name or "")[:120]
+    d.reasons = reasons
+    d.auto = not reasons and rule is not None and rule.auto_book
+    return d
+
+
 def decide(db: Session, tenant: Tenant, *, group: str, qr: dict | None, llm: dict, text: str,
            supplier: Supplier | None, rule: Rule | None, matched_by: str = "") -> Decision:
     s = get_settings()
@@ -323,6 +366,11 @@ def decide(db: Session, tenant: Tenant, *, group: str, qr: dict | None, llm: dic
     d.currency = ((qr or {}).get("currency") or llm.get("currency") or "CHF").upper()
     qr_amount = _fmt_amount((qr or {}).get("amount"))
     llm_amount = _fmt_amount(llm.get("total_gross"))
+    commission = is_commission(llm)
+    if commission:
+        # credit notes print the total negative (iWay: -26.10); the debtor invoice carries the positive amount
+        qr_amount = abs(qr_amount) if qr_amount else qr_amount
+        llm_amount = abs(llm_amount) if llm_amount else llm_amount
     d.amount = qr_amount if qr_amount else llm_amount
 
     doc_type = llm.get("document_type", "other")
@@ -330,7 +378,7 @@ def decide(db: Session, tenant: Tenant, *, group: str, qr: dict | None, llm: dic
         reasons.append("Beleg nicht als Rechnung/Quittung erkannt")
     if doc_type == "reminder":
         reasons.append("Mahnung, nie automatisch buchen")
-    if doc_type == "credit_note":
+    if doc_type == "credit_note" and not commission:
         reasons.append("Gutschrift, manuell prüfen")
     if doc_type == "statement":
         reasons.append("Kontoauszug/Statement, manuell prüfen")
@@ -345,8 +393,13 @@ def decide(db: Session, tenant: Tenant, *, group: str, qr: dict | None, llm: dic
             reasons.append(f"Konfidenz {k} nur {conf.get(k, 0):.2f}")
     vat_sum = sum(_fmt_amount(v.get("amount")) or 0 for v in llm.get("vat_lines") or [])
     net = _fmt_amount(llm.get("total_net"))
+    if commission:
+        vat_sum, net = abs(vat_sum), abs(net) if net else net
     if net and vat_sum and d.amount and abs(net + vat_sum - d.amount) > 0.06:
         reasons.append("Netto + MWST ergibt nicht das Total")
+
+    if commission:
+        return _decide_commission(tenant, d, reasons, llm, rule)
 
     # --- payment status from the Zammad group ---------------------------------------
     paid_hint = llm.get("payment_status") == "paid" or doc_type == "receipt"

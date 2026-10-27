@@ -325,6 +325,14 @@ class BexioClient:
     def create_outgoing_payment(self, payload: dict) -> dict:
         return self.post("/4.0/purchase/outgoing-payments", payload)
 
+    # --- debtor invoices (API 2.0, scope kb_invoice_edit): commission credit notes -------
+    def create_invoice(self, payload: dict) -> dict:
+        return self.post("/2.0/kb_invoice", payload)
+
+    def issue_invoice(self, invoice_id: int) -> dict:
+        """Draft -> pending (open, the bank sync can match the incoming payment)."""
+        return self.post(f"/2.0/kb_invoice/{invoice_id}/issue")
+
     # --- manual entries (API 3.0) ----------------------------------------------------
     def create_manual_entry(self, date: str, reference_nr: str, entries: list[dict]) -> dict:
         """One line: manual_single_entry, several lines (e.g. one per VAT rate): manual_compound_entry."""
@@ -431,6 +439,29 @@ def build_bill_payload(*, supplier_id: int, contact_partner_id: int | None, supp
         if bank_account_id:
             pay["bank_account_id"] = bank_account_id
         payload["payment"] = pay
+    return payload
+
+
+def build_invoice_payload(*, contact_id: int, user_id: int, title: str, doc_date: str, due_date: str, amount_gross: float,
+                          account_id: int, tax_id: int | None, text: str, reference: str) -> dict:
+    """POST /2.0/kb_invoice for a commission credit note: one custom position, prices incl. VAT (mwst_type 0, gross),
+    as the commission invoices booked by hand (revenue 3681 with UN81)."""
+    pos = {"type": "KbPositionCustom", "amount": "1", "unit_price": f"{round(float(amount_gross), 2):.2f}",
+           "account_id": account_id, "text": (text or title)[:500]}
+    if tax_id:
+        pos["tax_id"] = tax_id
+    payload = {
+        "contact_id": contact_id,
+        "user_id": user_id,
+        "title": title[:80],
+        "mwst_type": 0,
+        "mwst_is_net": False,
+        "is_valid_from": doc_date,
+        "is_valid_to": due_date or doc_date,
+        "positions": [pos],
+    }
+    if reference:
+        payload["reference"] = reference[:80]
     return payload
 
 
