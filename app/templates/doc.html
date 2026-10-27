@@ -51,11 +51,13 @@
         <table class="plain">
           <thead><tr><th>Text</th><th class="r">Betrag brutto</th><th>Konto (leer = Aufwandkonto)</th><th>Steuercode</th></tr></thead>
           <tbody>
+          {% set main = (md.get('accounts', [])|selectattr('id', 'equalto', dec.account_id)|list)[0] if dec.account_id else none %}
+          {% set main_account = ([main.no, main.name]|select|join(' ')) if main else 'wie Aufwandkonto' %}
           {% for ln in (dec.lines or []) + [{}, {}] %}
           <tr>
             <td><input name="line_title" value="{{ ln.title or '' }}" aria-label="Text"></td>
             <td><input name="line_amount" value="{{ '%.2f'|format(ln.amount) if ln.amount else '' }}" inputmode="decimal" aria-label="Betrag brutto" class="r"></td>
-            <td>{{ account_input('line_account_no', md.get('accounts', []), ln.account_id, 'dl-accounts') }}</td>
+            <td>{{ account_input('line_account_no', md.get('accounts', []), ln.account_id, 'dl-accounts', placeholder=main_account) }}</td>
             <td>{{ tax_input('line_tax_code', md.get('taxes', []), ln.tax_id, 'dl-taxes') }}</td>
           </tr>
           {% endfor %}
