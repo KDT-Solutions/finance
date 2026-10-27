@@ -119,7 +119,7 @@ def _doc_dict(d: Document, full: bool = False) -> dict:
     out = {
         "id": d.id, "tenant": d.tenant.code, "state": d.state, "received_at": d.received_at.isoformat() if d.received_at else None,
         "filename": d.filename, "ticket": d.zammad_ticket_number, "ticket_title": d.ticket_title, "zammad_group": d.zammad_group,
-        "supplier": d.supplier.display_name if d.supplier else dec.get("supplier_name"),
+        "supplier": d.supplier.display_name if d.supplier else dec.get("supplier_name"), "supplier_id": d.supplier_id,
         "amount": dec.get("amount"), "currency": dec.get("currency"), "amount_chf": dec.get("amount_chf"), "doc_date": dec.get("doc_date"), "due_date": dec.get("due_date"),
         "document_number": dec.get("document_number"), "payment_mode": dec.get("payment_mode"),
         "account_no": pipeline._master(d.tenant, "accounts", dec.get("account_id")).get("no"),
