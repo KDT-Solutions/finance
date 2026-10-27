@@ -303,6 +303,15 @@ def _apply_form(db: Session, doc: Document, form) -> dict:
     dec["already_paid"] = form.get("already_paid") == "1"
     if "amount_chf" in form:
         dec["amount_chf"] = num(form.get("amount_chf"))
+    if "line_amount" in form:
+        # positions (one per VAT rate); rows without amount are dropped, fewer than two means a single line
+        lines = []
+        for title, amount, acc, tax in zip(form.getlist("line_title"), form.getlist("line_amount"),
+                                           form.getlist("line_account_no"), form.getlist("line_tax_code")):
+            if num(amount):
+                lines.append({"title": (title or "").strip()[:80], "amount": num(amount),
+                              "account_id": _resolve_account(doc.tenant, acc), "tax_id": _resolve_tax(doc.tenant, tax)})
+        dec["lines"] = lines if len(lines) > 1 else []
     # supplier rename / merge
     if dec["supplier_name"] and (not doc.supplier or rules.normalize_name(dec["supplier_name"]) != doc.supplier.name_key):
         existing = db.query(Supplier).filter(Supplier.tenant_id == doc.tenant_id, Supplier.name_key == rules.normalize_name(dec["supplier_name"])).first()
@@ -332,6 +341,8 @@ async def doc_book(request: Request, doc_id: int, db: Session = Depends(get_db),
         missing.append("payment_account_id")
     if actions.needs_chf(dec) and not dec.get("amount_chf"):
         missing.append("Betrag CHF")
+    if dec.get("lines") and dec.get("amount") and abs(sum(ln["amount"] for ln in dec["lines"]) - dec["amount"]) > 0.005:
+        missing.append(f"Positionen ergeben {sum(ln['amount'] for ln in dec['lines']):.2f} statt {dec['amount']:.2f}")
     if missing or not doc.supplier:
         doc.state = "needs_review"
         doc.review_reason = "Felder fehlen: " + ", ".join(missing or ["Lieferant"])

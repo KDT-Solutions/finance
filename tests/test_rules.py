@@ -147,3 +147,37 @@ def test_decide_open_foreign_currency_stays_manual(db):
     d = rules.decide(db, t, group="Finance toPay KDT", qr=None, llm=llm, text="", supplier=None, rule=None)
     assert d.needs_chf is False
     assert "Fremdwährung USD (Phase 1 manuell)" in d.reasons
+
+
+def _brack_llm():
+    # Brack Rechnung 49777632: 8.1% Basis 29.97 MWST 2.43, 2.6% Basis 21.76 MWST 0.57, Total 54.75
+    return {"is_receipt": True, "document_type": "invoice", "supplier_name": "Brack AG", "document_number": "49777632", "document_date": "2026-10-02",
+            "currency": "CHF", "total_gross": 54.75, "total_net": 51.73, "supplier_country": "CH",
+            "vat_lines": [{"rate": 2.6, "base": 21.76, "amount": 0.57}, {"rate": 8.1, "base": 29.97, "amount": 2.43}],
+            "payment_status": "unpaid", "confidence": {"total_gross": 0.99, "document_date": 0.99}}
+
+
+def test_decide_splits_by_vat_rate(db):
+    t = db.query(Tenant).one()
+    d = rules.decide(db, t, group="Finance toPay KDT", qr=None, llm=_brack_llm(), text="", supplier=None, rule=None)
+    # default account 4400 (material) -> VM codes; positions 32.40 + 22.33 = 54.73, the 5-Rappen rounding to 54.75 goes to the largest
+    assert d.lines == [{"title": "MWST 8.1%", "amount": 32.42, "account_id": None, "tax_id": 5},
+                       {"title": "MWST 2.6%", "amount": 22.33, "account_id": None, "tax_id": 6}]
+    assert "Mehrere MWST-Sätze (8.1%, 2.6%), Aufteilung prüfen" in d.reasons
+    assert d.auto is False
+
+
+def test_split_rounding_goes_to_largest_and_rest_without_vat(db):
+    t = db.query(Tenant).one()
+    llm = _brack_llm()
+    lines, reasons = rules.split_by_vat(t, 90, llm, 54.78)
+    assert [ln["amount"] for ln in lines] == [32.45, 22.33] and reasons == []
+    lines, reasons = rules.split_by_vat(t, 90, llm, 64.73)
+    assert lines[-1] == {"title": "ohne MWST", "amount": 10.0, "account_id": None, "tax_id": None}
+    assert reasons == ["Positionen ohne MWST 10.00, prüfen"]
+
+
+def test_single_rate_has_no_lines(db):
+    t = db.query(Tenant).one()
+    llm = {**_brack_llm(), "vat_lines": [{"rate": 8.1, "base": 50.65, "amount": 4.10}]}
+    assert rules.split_by_vat(t, 90, llm, 54.75) == ([], [])

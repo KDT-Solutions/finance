@@ -327,7 +327,9 @@ class BexioClient:
 
     # --- manual entries (API 3.0) ----------------------------------------------------
     def create_manual_entry(self, date: str, reference_nr: str, entries: list[dict]) -> dict:
-        return self.post("/3.0/accounting/manual_entries", {"type": "manual_single_entry", "date": date, "reference_nr": reference_nr[:40], "entries": entries})
+        """One line: manual_single_entry, several lines (e.g. one per VAT rate): manual_compound_entry."""
+        kind = "manual_compound_entry" if len(entries) > 1 else "manual_single_entry"
+        return self.post("/3.0/accounting/manual_entries", {"type": kind, "date": date, "reference_nr": reference_nr[:40], "entries": entries})
 
     def attach_file_to_entry(self, manual_entry_id: int, entry_id: int, filename: str, content: bytes) -> dict:
         return self._req("POST", f"/3.0/accounting/manual_entries/{manual_entry_id}/entries/{entry_id}/files",
@@ -341,21 +343,26 @@ class BexioClient:
 def build_bill_payload(*, supplier_id: int, contact_partner_id: int | None, supplier_name: str, document_no: str, title: str,
                        bill_date: str, due_date: str, currency: str, amount_gross: float, account_id: int,
                        tax_id: int | None, text: str, attachment_ids: list[str], qr: dict | None,
-                       bank_account_id: int | None = None, exchange_rate: float | None = None, supplier_iban: str = "") -> dict:
+                       bank_account_id: int | None = None, exchange_rate: float | None = None, supplier_iban: str = "",
+                       lines: list[dict] | None = None) -> dict:
     """POST /4.0/purchase/bills body per the bexio OpenAPI spec (required: supplier_id, contact_partner_id, currency_code,
     address, bill_date, due_date, manual_amount, item_net, line_items, discounts, attachment_ids; amount_calc when
     manual_amount is false). Line items carry 'title', not 'text'. Payment: type IBAN | QR | MANUAL with
-    execution_date, amount, salary_payment required; iban, name, reference_no (27), message (140), bank_account_id."""
+    execution_date, amount, salary_payment required; iban, name, reference_no (27), message (140), bank_account_id.
+    lines: several positions (e.g. one per VAT rate), each {title, amount (gross), account_id, tax_id}; else one line."""
     amount = round(float(amount_gross), 2)
     due = due_date or bill_date
-    line = {
-        "position": 0,
-        "title": (text or title or document_no or "Rechnung")[:80],
-        "amount": amount,
-        "booking_account_id": account_id,
-    }
-    if tax_id:
-        line["tax_id"] = tax_id
+    items = []
+    for i, ln in enumerate(lines or [{"title": "", "amount": amount, "account_id": account_id, "tax_id": tax_id}]):
+        item = {
+            "position": i,
+            "title": (ln.get("title") or text or title or document_no or "Rechnung")[:80],
+            "amount": round(float(ln["amount"]), 2),
+            "booking_account_id": ln.get("account_id") or account_id,
+        }
+        if ln.get("tax_id"):
+            item["tax_id"] = ln["tax_id"]
+        items.append(item)
     head = " | ".join(x for x in ((supplier_name or "").strip(), (document_no or "").strip()) if x) or (title or "Rechnung")
     payload = {
         "supplier_id": supplier_id,
@@ -371,7 +378,7 @@ def build_bill_payload(*, supplier_id: int, contact_partner_id: int | None, supp
             "type": "COMPANY",
             "main_contact_id": supplier_id,
         },
-        "line_items": [line],
+        "line_items": items,
         "discounts": [],
         "attachment_ids": list(attachment_ids or []),
     }
@@ -422,6 +429,17 @@ def build_bill_payload(*, supplier_id: int, contact_partner_id: int | None, supp
             pay["bank_account_id"] = bank_account_id
         payload["payment"] = pay
     return payload
+
+
+def build_manual_entry_split(*, lines: list[dict], debit_account_id: int, credit_account_id: int, description: str) -> list[dict]:
+    """Paid receipt with several positions (e.g. one per VAT rate): one compound-entry line each against the payment account."""
+    out = []
+    for ln in lines:
+        acc = ln.get("account_id") or debit_account_id
+        text = " ".join(x for x in (description, ln.get("title") or "") if x)
+        out += build_manual_entry_lines(amount=ln["amount"], debit_account_id=acc, credit_account_id=credit_account_id,
+                                        tax_id=ln.get("tax_id"), tax_account_id=acc, description=text)
+    return out
 
 
 def build_manual_entry_lines(*, amount: float, debit_account_id: int, credit_account_id: int, tax_id: int | None,

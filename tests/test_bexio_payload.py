@@ -32,3 +32,22 @@ def test_bill_payload_without_partner_and_qr():
     assert "contact_partner_id" not in p and "payment" not in p and "vendor_ref" not in p
     assert p["due_date"] == "2026-10-01" and p["currency_code"] == "CHF"
     assert "tax_id" not in p["line_items"][0]
+
+
+def test_bill_payload_with_positions():
+    lines = [{"title": "MWST 8.1%", "amount": 32.4, "account_id": None, "tax_id": 35},
+             {"title": "MWST 2.6%", "amount": 22.33, "account_id": 171, "tax_id": 34}]
+    p = bx.build_bill_payload(supplier_id=12, contact_partner_id=3, supplier_name="Brack AG", document_no="49777632", title="",
+                              bill_date="2026-10-02", due_date="2026-10-12", currency="CHF", amount_gross=54.75, account_id=170,
+                              tax_id=35, text="Einkauf", attachment_ids=[], qr=None, lines=lines)
+    assert p["amount_calc"] == 54.75
+    assert [(li["position"], li["title"], li["amount"], li["booking_account_id"], li["tax_id"]) for li in p["line_items"]] == [
+        (0, "MWST 8.1%", 32.4, 170, 35), (1, "MWST 2.6%", 22.33, 171, 34)]
+
+
+def test_manual_entry_split():
+    lines = [{"title": "MWST 8.1%", "amount": 32.4, "tax_id": 35}, {"title": "MWST 2.6%", "amount": 22.33, "tax_id": 34}]
+    e = bx.build_manual_entry_split(lines=lines, debit_account_id=170, credit_account_id=99, description="Brack 49777632")
+    assert [(x["debit_account_id"], x["credit_account_id"], x["amount"], x["tax_id"], x["tax_account_id"]) for x in e] == [
+        (170, 99, 32.4, 35, 170), (170, 99, 22.33, 34, 170)]
+    assert e[1]["description"] == "Brack 49777632 MWST 2.6%"

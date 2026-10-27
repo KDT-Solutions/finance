@@ -9,7 +9,7 @@ from ..config import get_settings
 
 log = logging.getLogger(__name__)
 
-PROMPT_VERSION = "1"
+PROMPT_VERSION = "2"
 
 SCHEMA = {
     "type": "object",
@@ -32,7 +32,8 @@ SCHEMA = {
         "currency": {"type": "string", "description": "ISO 4217"},
         "total_gross": {"type": "number"},
         "total_net": {"type": "number"},
-        "vat_lines": {"type": "array", "items": {"type": "object", "properties": {"rate": {"type": "number"}, "base": {"type": "number"}, "amount": {"type": "number"}}, "required": ["rate", "amount"]}},
+        "vat_lines": {"type": "array", "description": "one entry per VAT rate from the VAT summary (e.g. 2.6% and 8.1% on one invoice): "
+                      "rate in percent, base = net amount taxed at that rate, amount = VAT; include a 0% rate only if printed", "items": {"type": "object", "properties": {"rate": {"type": "number"}, "base": {"type": "number"}, "amount": {"type": "number"}}, "required": ["rate", "amount"]}},
         "line_items": {"type": "array", "items": {"type": "object", "properties": {"description": {"type": "string"}, "amount_gross": {"type": "number"}, "vat_rate": {"type": "number"}}, "required": ["description", "amount_gross"]}},
         "payment_status": {"type": "string", "enum": ["unpaid", "paid", "unknown"]},
         "paid_hint": {"type": "string", "description": "verbatim hint such as 'bezahlt mit Visa ****1234' or 'Zahlungsbestätigung', else empty"},

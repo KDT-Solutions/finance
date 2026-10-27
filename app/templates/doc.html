@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Beleg {{ doc.id }} – finance{% endblock %}
-{% from "_pickers.html" import account_picker, tax_picker %}
+{% from "_pickers.html" import account_picker, tax_picker, account_input, tax_input %}
 {% block content %}
 {% set llm = (extraction.llm if extraction else {}) or {} %}
 {% set qr = (extraction.qr if extraction else none) %}
@@ -46,6 +46,23 @@
       <label class="wide">Steuercode
         {{ tax_picker('tax_code', md.get('taxes', []), dec.tax_id, list_id='dl-taxes') }}
       </label>
+      <fieldset class="wide positions">
+        <legend>Positionen {% if dec.lines %}(Summe muss dem Betrag entsprechen){% else %}(optional, z.B. je MWST-Satz){% endif %}</legend>
+        <table class="plain">
+          <thead><tr><th>Text</th><th class="r">Betrag brutto</th><th>Konto (leer = Aufwandkonto)</th><th>Steuercode</th></tr></thead>
+          <tbody>
+          {% for ln in (dec.lines or []) + [{}, {}] %}
+          <tr>
+            <td><input name="line_title" value="{{ ln.title or '' }}" aria-label="Text"></td>
+            <td><input name="line_amount" value="{{ '%.2f'|format(ln.amount) if ln.amount else '' }}" inputmode="decimal" aria-label="Betrag brutto" class="r"></td>
+            <td>{{ account_input('line_account_no', md.get('accounts', []), ln.account_id, 'dl-accounts') }}</td>
+            <td>{{ tax_input('line_tax_code', md.get('taxes', []), ln.tax_id, 'dl-taxes') }}</td>
+          </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+        {% if dec.lines %}<p class="muted">Summe Positionen {{ '%.2f'|format(dec.lines|sum(attribute='amount')) }}. Betrag leeren entfernt eine Position, mit weniger als zwei Positionen wird einzeilig gebucht.</p>{% endif %}
+      </fieldset>
       <label>Zahlung
         <select name="payment_mode">
           <option value="open" {{ 'selected' if dec.payment_mode in ('open', none) }}>offen (Kreditorenrechnung)</option>
