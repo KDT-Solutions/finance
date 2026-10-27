@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
@@ -208,7 +208,7 @@ def list_files(tenant: Tenant) -> list[dict]:
         void = n.endswith(".xml" + VOID_SUFFIX)
         if n.endswith(".xml") or void:
             st = os.stat(os.path.join(folder, n))
-            out.append({"name": n[: -len(VOID_SUFFIX)] if void else n, "void": void, "size": st.st_size, "at": datetime.fromtimestamp(st.st_mtime)})
+            out.append({"name": n[: -len(VOID_SUFFIX)] if void else n, "void": void, "size": st.st_size, "at": datetime.fromtimestamp(st.st_mtime, timezone.utc)})
     out.sort(key=lambda f: f["name"], reverse=True)
     return out[:50]
 

@@ -6,7 +6,7 @@
 <thead><tr><th>Zeit</th><th>Akteur</th><th>Aktion</th><th>Objekt</th><th>Details</th></tr></thead>
 <tbody>
 {% for a in rows %}
-<tr><td>{{ a.at.strftime('%d.%m.%y %H:%M:%S') }}</td><td>{{ a.actor }}</td><td>{{ a.action }}</td>
+<tr><td>{{ a.at|chdatetime(seconds=True) }}</td><td>{{ a.actor }}</td><td>{{ a.action }}</td>
 <td>{% if a.entity == 'document' and a.entity_id %}<a href="/docs/{{ a.entity_id }}">Beleg {{ a.entity_id }}</a>{% elif a.entity == 'rule' and a.entity_id %}<a href="/rules/{{ a.entity_id }}">Regel {{ a.entity_id }}</a>{% else %}{{ a.entity or '' }} {{ a.entity_id or '' }}{% endif %}</td>
 <td class="muted small">{{ a.details|tojson if a.details else '' }}</td></tr>
 {% endfor %}

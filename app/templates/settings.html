@@ -8,7 +8,7 @@
 {% for t in tenants %}
 <section class="card">
   <h3>{{ t.code }} · {{ t.name }}
-    {% if t.bexio_connected %}<span class="ok">bexio verbunden{% if t.bexio_company_name %} ({{ t.bexio_company_name }}{% if t.bexio_company_id %}, ID {{ t.bexio_company_id }}{% endif %}){% endif %}{% if not t.bexio_company_id %} – Firma ungeprüft, neu verbinden{% endif %}{% if t.master_data_at %}, Stammdaten {{ t.master_data_at.strftime('%d.%m.%y %H:%M') }}{% endif %}</span>{% else %}<span class="error">bexio nicht verbunden</span>{% endif %}
+    {% if t.bexio_connected %}<span class="ok">bexio verbunden{% if t.bexio_company_name %} ({{ t.bexio_company_name }}{% if t.bexio_company_id %}, ID {{ t.bexio_company_id }}{% endif %}){% endif %}{% if not t.bexio_company_id %} – Firma ungeprüft, neu verbinden{% endif %}{% if t.master_data_at %}, Stammdaten {{ t.master_data_at|chdatetime }}{% endif %}</span>{% else %}<span class="error">bexio nicht verbunden</span>{% endif %}
   </h3>
   <div class="actions">
     {% if t.bexio_connected %}

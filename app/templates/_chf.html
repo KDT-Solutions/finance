@@ -1,11 +1,11 @@
 {% macro chf_table(chf_docs, back, tenant) %}
 <table class="cards">
-<thead><tr><th>Mandant</th><th>Datum</th><th>Lieferant</th><th class="r">Betrag</th><th>Zahlkonto</th><th>Betrag CHF</th></tr></thead>
+<thead><tr><th>Mandant</th><th>Datum</th><th>Lieferant</th><th class="r">Betrag</th><th>Zahlkonto</th><th>Betrag CHF</th><th></th></tr></thead>
 <tbody>
 {% for d in chf_docs %}{% set dec = d.decision or {} %}
 <tr>
   <td data-label="Mandant">{{ d.tenant.code }}</td>
-  <td data-label="Datum">{{ dec.get('doc_date') or d.received_at.strftime('%Y-%m-%d') }}</td>
+  <td data-label="Datum">{{ (dec.get('doc_date') or d.received_at)|chdate }}</td>
   <td data-label="Lieferant"><a href="/docs/{{ d.id }}">{{ dec.get('supplier_name') or d.filename }}</a>{% if d.zammad_ticket_number %} <span class="muted">#{{ d.zammad_ticket_number }}</span>{% endif %}</td>
   <td class="r" data-label="Betrag">{{ dec.get('currency') }} {{ '%.2f'|format(dec.amount or 0) }}</td>
   <td data-label="Zahlkonto">{{ payment_labels.get(dec.get('payment_account_id'), '-') }}</td>
@@ -16,6 +16,7 @@
       <button class="primary">Buchen</button>
     </form>
   </td>
+  <td class="actions-cell"><a class="btn" href="/docs/{{ d.id }}">Öffnen</a></td>
 </tr>
 {% endfor %}
 </tbody></table>

@@ -11,10 +11,10 @@
   <div class="pane form">
     <div class="head">
       <h2>{{ doc.tenant.code }} · {% if doc.zammad_ticket_number %}Ticket#{{ doc.zammad_ticket_number }}{% else %}Upload{% endif %} · <span class="state {{ doc.state }}">{{ doc.state }}</span></h2>
-      <p class="muted">{{ doc.filename }} · {{ doc.received_at.strftime('%d.%m.%Y %H:%M') }} · Gruppe {{ doc.zammad_group or '-' }}{% if doc.ticket_title %} · {{ doc.ticket_title }}{% endif %}</p>
+      <p class="muted">{{ doc.filename }} · {{ doc.received_at|chdatetime }} · Gruppe {{ doc.zammad_group or '-' }}{% if doc.ticket_title %} · {{ doc.ticket_title }}{% endif %}</p>
       {% if doc.review_reason %}<p class="warn">{{ doc.review_reason }}</p>{% endif %}
       {% if doc.last_error %}<p class="error">{{ doc.last_error }}</p>{% endif %}
-      {% if doc.booking %}<p class="ok">Gebucht als {{ doc.booking.kind }} · bexio {{ doc.booking.bexio_bill_id or doc.booking.bexio_entry_id }} · {{ doc.booking.booked_at.strftime('%d.%m.%Y %H:%M') }}</p>{% endif %}
+      {% if doc.booking %}<p class="ok">Gebucht als {{ doc.booking.kind }} · bexio {{ doc.booking.bexio_bill_id or doc.booking.bexio_entry_id }} · {{ doc.booking.booked_at|chdatetime }}</p>{% endif %}
     </div>
 
     {% if extraction %}

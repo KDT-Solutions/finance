@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from urllib.parse import quote
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
@@ -21,6 +22,43 @@ from ..services.zammad import ZammadClient
 log = logging.getLogger(__name__)
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
+ZURICH = ZoneInfo("Europe/Zurich")
+
+
+def _as_date(value):
+    """datetime (aware ones in Zurich time), date or ISO string -> date/datetime; None if empty, the value itself if unparsable."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value.strip()) if len(value.strip()) > 10 else date.fromisoformat(value.strip())
+        except ValueError:
+            return value
+    if isinstance(value, datetime) and value.tzinfo:
+        value = value.astimezone(ZURICH)
+    return value
+
+
+def chdate(value) -> str:
+    """Swiss date: 27.10.2026."""
+    v = _as_date(value)
+    if v is None:
+        return ""
+    return v.strftime("%d.%m.%Y") if isinstance(v, date) else v
+
+
+def chdatetime(value, seconds: bool = False) -> str:
+    """Swiss date and time: 27.10.2026 14:05 (with seconds on request); a plain date shows without time."""
+    v = _as_date(value)
+    if v is None:
+        return ""
+    if isinstance(v, datetime):
+        return v.strftime("%d.%m.%Y %H:%M:%S" if seconds else "%d.%m.%Y %H:%M")
+    return v.strftime("%d.%m.%Y") if isinstance(v, date) else v
+
+
+templates.env.filters["chdate"] = chdate
+templates.env.filters["chdatetime"] = chdatetime
 
 
 def get_db():

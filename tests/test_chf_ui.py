@@ -84,3 +84,13 @@ def test_missing_chf_is_rejected(client):
     r = c.post(f"/docs/{doc_id}/chf", data={"csrf": "tok", "amount_chf": "", "back": "/chf"}, follow_redirects=False)
     assert r.status_code == 303 and "err=" in r.headers["location"]
     assert Session().get(Document, doc_id).state == "needs_chf" and FakeBexio.entries == []
+
+
+def test_lists_have_open_button_and_swiss_date(client):
+    c, _, doc_id = client
+    for path in ("/todo", "/chf"):
+        r = c.get(path)
+        assert f'<a class="btn" href="/docs/{doc_id}">Öffnen</a>' in r.text
+        assert "26.10.2026" in r.text and "2026-10-26</td>" not in r.text
+        # the row itself is not clickable, typing into the CHF field must not navigate
+        assert f'data-href="/docs/{doc_id}"' not in r.text
