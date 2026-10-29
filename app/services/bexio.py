@@ -496,3 +496,30 @@ def build_manual_entry_lines(*, amount: float, debit_account_id: int, credit_acc
         line["tax_id"] = tax_id
         line["tax_account_id"] = tax_account_id or debit_account_id
     return [line]
+
+
+# Weblink auf eine Kreditorenrechnung (Einkauf, Bills-API v4) in der bexio-Oberfläche.
+# Öffnet die Rechnung in der Firma, die im Browser gerade ausgewählt ist.
+BILL_WEB_URL = "https://office.bexio.com/index.php/kb_bill/list/show/{id}"
+
+
+def bill_web_url(bill_id: str | None) -> str:
+    return BILL_WEB_URL.format(id=bill_id) if bill_id else ""
+
+
+# Weblink auf eine Debitorenrechnung (Provisions-Gutschrift, kb_invoice).
+INVOICE_WEB_URL = "https://office.bexio.com/index.php/kb_invoice/show/id/{id}"
+
+
+def invoice_web_url(invoice_id) -> str:
+    return INVOICE_WEB_URL.format(id=invoice_id) if invoice_id else ""
+
+
+def booking_web_url(kind: str | None, bexio_id) -> str:
+    """Link zur gebuchten Rechnung in bexio (leer bei manuellen Buchungen)."""
+    if kind == "bill_open":
+        return bill_web_url(bexio_id)
+    if kind == "credit_invoice":
+        return invoice_web_url(bexio_id)
+    return ""
+

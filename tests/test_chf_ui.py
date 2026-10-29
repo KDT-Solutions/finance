@@ -237,3 +237,10 @@ def test_doc_page_labels_income_account_for_credit(client):
     s.commit()
     page = c.get(f"/docs/{doc_id}").text
     assert "<span data-acc-label>Ertragskonto (Provision)</span>" in page
+
+
+def test_bexio_web_links():
+    from app.services import bexio as bx
+    assert bx.booking_web_url("bill_open", "0908cb93-08bd") == "https://office.bexio.com/index.php/kb_bill/list/show/0908cb93-08bd"
+    assert bx.booking_web_url("credit_invoice", "68") == "https://office.bexio.com/index.php/kb_invoice/show/id/68"
+    assert bx.booking_web_url("entry", "5") == "" and bx.booking_web_url("bill_open", None) == ""

@@ -399,7 +399,7 @@ def book(db: Session, z: ZammadClient | None, doc: Document, *, actor: str = "sy
                     f"Partner: {dec.get('supplier_name')}\nBetrag: {booking.currency} {amount:.2f}\n"
                     f"Konto: {_master(tenant, 'accounts', dec.get('account_id')).get('no', dec.get('account_id'))}, "
                     f"Steuercode: {_master(tenant, 'taxes', dec.get('tax_id')).get('code', dec.get('tax_id') or '-')}\n"
-                    f"bexio Rechnung-ID: {invoice_id} {created.get('document_nr') or ''}".rstrip())
+                    f"bexio: {bx.invoice_web_url(invoice_id)} {created.get('document_nr') or ''}".rstrip())
             close_ticket = True
         elif mode == "open":
             existing = client.find_bill(contact_id, docno)
@@ -428,7 +428,7 @@ def book(db: Session, z: ZammadClient | None, doc: Document, *, actor: str = "sy
                     log.warning("bill %s created but not booked: %s", bill_id, e)
                     status = "DRAFT"
                 booking.kind, booking.bexio_bill_id, booking.bexio_file_id, booking.payload, booking.response, booking.bexio_status = "bill_open", bill_id, file_id, payload, created, status
-            note = f"finance: Kreditorenrechnung in bexio angelegt (offen).\nLieferant: {dec.get('supplier_name')}\nBetrag: {booking.currency} {amount:.2f}\nKonto: {_master(tenant, 'accounts', dec.get('account_id')).get('no', dec.get('account_id'))}, Steuercode: {_master(tenant, 'taxes', dec.get('tax_id')).get('code', dec.get('tax_id') or '-')}\nbexio Bill-ID: {booking.bexio_bill_id}"
+            note = f"finance: Kreditorenrechnung in bexio angelegt (offen).\nLieferant: {dec.get('supplier_name')}\nBetrag: {booking.currency} {amount:.2f}\nKonto: {_master(tenant, 'accounts', dec.get('account_id')).get('no', dec.get('account_id'))}, Steuercode: {_master(tenant, 'taxes', dec.get('tax_id')).get('code', dec.get('tax_id') or '-')}\nbexio: {bx.bill_web_url(booking.bexio_bill_id)}"
             # already paid (checkbox / MCP flag, or an agent wrote "bezahlt" into the ticket): close now,
             # the bank sync settles the bill in bexio
             already_paid = bool(dec.get("already_paid"))

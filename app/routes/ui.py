@@ -17,11 +17,13 @@ from ..config import get_settings
 from ..db import SessionLocal
 from ..models import AuditLog, Booking, Document, KV, PaymentAccount, Rule, Supplier, Tenant, now
 from ..services import actions, audit, bexio as bx, pain001, payments, pipeline, rules
+from ..services import bexio as bx_links
 from ..services.zammad import ZammadClient
 
 log = logging.getLogger(__name__)
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
+templates.env.globals["bexio_url"] = bx_links.booking_web_url
 ZURICH = ZoneInfo("Europe/Zurich")
 
 
