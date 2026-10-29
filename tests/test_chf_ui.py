@@ -225,3 +225,15 @@ def test_doc_page_reset_booking(client):
     c.post(f"/docs/{doc_id}/reset", data={"csrf": "tok"}, follow_redirects=False)
     doc = Session().get(Document, doc_id)
     assert doc.state == "needs_review" and doc.booking is None
+
+
+def test_doc_page_labels_income_account_for_credit(client):
+    c, Session, doc_id = client
+    page = c.get(f"/docs/{doc_id}").text
+    assert "<span data-acc-label>Aufwandkonto</span>" in page and "data-acc-switch" in page
+    s = Session()
+    doc = s.get(Document, doc_id)
+    doc.decision = {**(doc.decision or {}), "payment_mode": "credit", "account_id": None}
+    s.commit()
+    page = c.get(f"/docs/{doc_id}").text
+    assert "<span data-acc-label>Ertragskonto (Provision)</span>" in page
