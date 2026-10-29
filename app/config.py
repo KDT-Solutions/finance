@@ -50,6 +50,9 @@ class Settings(BaseSettings):
     max_pdf_bytes: int = 20_000_000
     # daily summary push (local hour)
     summary_hour: int = 9
+    # daily due check (creditor and debtor invoices): warn this many days before the due date, push at this local hour
+    due_warn_days: int = 5
+    due_check_hour: int = 9
     # paid via payment file but not settled in bexio yet: ticket waits this many days (pending reminder), then re-check
     payment_wait_days: int = 14
     # local hour of the pending reminder
