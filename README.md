@@ -24,6 +24,14 @@ in Zammad tickets, the tool reads them, decides how to book them and writes to b
    (all payments open again). The old file is locked in every case (renamed to `.void`, no
    download); all three are refused when a bill in the file is already paid in bexio.
 
+## Due check
+
+Once a day (`DUE_CHECK_HOUR`, default 09:00 local) the worker reads open creditor bills (bexio purchase bills, status TODO
+with a pending amount) and open debtor invoices (kb_invoice status open, partially paid or unpaid) of every connected tenant
+and sends one Pushover message listing everything that is overdue or falls due within `DUE_WARN_DAYS` (default 5) days,
+overdue first. Bills already in a payment file are marked as such. Nothing is sent when nothing is due. The MCP tool
+`due_check` runs the same check on demand. Read-only.
+
 ## Stack
 
 FastAPI + SQLAlchemy + Postgres, a worker process, server-rendered UI. Containers:

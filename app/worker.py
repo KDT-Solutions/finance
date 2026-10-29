@@ -11,7 +11,7 @@ from . import healthcheck
 from .config import get_settings
 from .db import SessionLocal, init_db
 from .models import Document, Tenant
-from .services import notify, pipeline
+from .services import due_check, notify, pipeline
 from .services.zammad import ZammadClient
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -19,10 +19,11 @@ log = logging.getLogger("worker")
 
 _last_paid_check = 0.0
 _last_summary_day = ""
+_last_due_day = ""
 
 
 def tick() -> None:
-    global _last_paid_check, _last_summary_day
+    global _last_paid_check, _last_summary_day, _last_due_day
     s = get_settings()
     if not (s.zammad_url and s.zammad_token):
         log.warning("Zammad nicht konfiguriert, Worker wartet")
@@ -57,6 +58,15 @@ def tick() -> None:
                 text = pipeline.summary_text(db)
                 if text:
                     notify.pushover("finance: offene Belege", f"Todo {text}\n{s.public_base_url}")
+            if local.hour >= s.due_check_hour and _last_due_day != today:
+                _last_due_day = today
+                try:
+                    text = due_check.summary_text(due_check.check_all(db, days=s.due_warn_days, today=local.date()))
+                    if text:
+                        notify.pushover("finance: fällige Rechnungen", text[:1000])
+                        log.info("Fälligkeits-Check: %s", text.replace("\n", " | "))
+                except Exception:  # noqa: BLE001
+                    log.exception("due check failed")
     finally:
         z.close()
 

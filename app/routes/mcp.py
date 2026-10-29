@@ -726,6 +726,24 @@ def t_bexio_bills(db, a):
                                    "pending_amount", "booking_account_ids")} for b in rows]
 
 
+@tool("due_check", "Fälligkeits-Check (nur lesend): offene Kreditorenrechnungen und Debitorenrechnungen aus bexio, die überfällig sind oder in den "
+      "nächsten days Tagen fällig werden (Standard DUE_WARN_DAYS). Ohne tenant alle Mandanten. Läuft zusätzlich täglich im Worker mit Pushover.",
+      {"tenant": {"type": "string", "description": "Mandant: KDT, TAB, DDL oder SPQ; leer = alle"},
+       "days": {"type": "integer", "description": "Vorwarnzeit in Tagen"}}, [])
+def t_due_check(db, a):
+    from ..services import due_check
+
+    days = int(a.get("days") if a.get("days") is not None else get_settings().due_warn_days)
+    if a.get("tenant"):
+        t = _tenant(db, a["tenant"])
+        if not t.bexio_connected:
+            raise ToolError(f"{t.code}: bexio nicht verbunden")
+        results = [due_check.check_tenant(db, t, days=days)]
+    else:
+        results = due_check.check_all(db, days=days)
+    return {"days": days, "results": results, "text": due_check.summary_text(results)}
+
+
 @tool("bexio_bill", "Eine Kreditorenrechnung im Detail aus bexio lesen (Positionen mit Konto und Steuer, Zahlung, Anhänge).",
       {"tenant": TENANT, "bill_id": {"type": "string", "description": "bexio Bill-UUID"}}, ["tenant", "bill_id"])
 def t_bexio_bill(db, a):
