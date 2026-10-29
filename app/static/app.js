@@ -33,3 +33,22 @@ document.querySelectorAll("table:not(.cards)").forEach(function (t) {
     window.history.replaceState(null, "", u.pathname + u.search);
   } catch (e) { /* old browser: a reload downloads again, harmless */ }
 })();
+
+// Gutschrift / Provision: das Konto ist ein Ertragskonto, kein Aufwandkonto. Beschriftung umschalten und bei
+// leerem Feld das Provisions-Ertragskonto des Mandanten vorschlagen.
+document.querySelectorAll("select[data-acc-switch]").forEach(function (sel) {
+  var form = sel.form;
+  if (!form) return;
+  var update = function () {
+    var credit = sel.value === "credit";
+    form.querySelectorAll("[data-acc-label]").forEach(function (el) {
+      var inHeader = el.closest("th");
+      el.textContent = credit ? (inHeader ? "Ertragskonto" : "Ertragskonto (Provision)") : "Aufwandkonto";
+    });
+    var acc = form.querySelector("input[name='account_no']");
+    if (credit && acc && !acc.value && sel.dataset.commissionAccount) {
+      acc.value = sel.dataset.commissionAccount;
+    }
+  };
+  sel.addEventListener("change", update);
+});

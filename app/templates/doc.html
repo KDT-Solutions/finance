@@ -32,6 +32,9 @@
     </details>
     {% endif %}
 
+    {% set is_credit = dec.payment_mode == 'credit' %}
+    {% set comm = (md.get('accounts', [])|selectattr('id', 'equalto', doc.tenant.commission_account_id)|list)[0] if doc.tenant.commission_account_id else none %}
+    {% set comm_value = ([comm.no, comm.name]|select|join(' ')) if comm else '' %}
     <form method="post" action="/docs/{{ doc.id }}/book" class="grid" id="bookform">
       <input type="hidden" name="csrf" value="{{ sess.csrf }}">
       <label>Lieferant <input name="supplier_name" value="{{ dec.supplier_name or (doc.supplier.display_name if doc.supplier else '') }}" required></label>
@@ -41,8 +44,8 @@
       <label>Betrag <input name="amount" value="{{ '%.2f'|format(dec.amount) if dec.amount else '' }}" required inputmode="decimal"></label>
       <label>Währung <input name="currency" value="{{ dec.currency or 'CHF' }}" maxlength="3"></label>
       {% if (dec.currency or 'CHF')|upper != 'CHF' %}<label>Betrag CHF (bezahlt, laut Abrechnung) <input name="amount_chf" value="{{ '%.2f'|format(dec.amount_chf) if dec.amount_chf else '' }}" inputmode="decimal"></label>{% endif %}
-      <label class="wide">Aufwandkonto
-        {{ account_picker('account_no', md.get('accounts', []), dec.account_id, required=True, list_id='dl-accounts') }}
+      <label class="wide"><span data-acc-label>{{ 'Ertragskonto (Provision)' if is_credit else 'Aufwandkonto' }}</span>
+        {{ account_picker('account_no', md.get('accounts', []), dec.account_id or (doc.tenant.commission_account_id if is_credit else none), required=True, list_id='dl-accounts') }}
       </label>
       <label class="wide">Steuercode
         {{ tax_picker('tax_code', md.get('taxes', []), dec.tax_id, list_id='dl-taxes') }}
@@ -50,10 +53,11 @@
       <fieldset class="wide positions">
         <legend>Positionen {% if dec.lines %}(Summe muss dem Betrag entsprechen){% else %}(optional, z.B. je MWST-Satz){% endif %}</legend>
         <table class="plain">
-          <thead><tr><th>Text</th><th class="r">Betrag brutto</th><th>Konto (leer = Aufwandkonto)</th><th>Steuercode</th></tr></thead>
+          <thead><tr><th>Text</th><th class="r">Betrag brutto</th><th>Konto (leer = <span data-acc-label>{{ 'Ertragskonto' if is_credit else 'Aufwandkonto' }}</span>)</th><th>Steuercode</th></tr></thead>
           <tbody>
-          {% set main = (md.get('accounts', [])|selectattr('id', 'equalto', dec.account_id)|list)[0] if dec.account_id else none %}
-          {% set main_account = ([main.no, main.name]|select|join(' ')) if main else 'wie Aufwandkonto' %}
+          {% set main_id = dec.account_id or (doc.tenant.commission_account_id if is_credit else none) %}
+          {% set main = (md.get('accounts', [])|selectattr('id', 'equalto', main_id)|list)[0] if main_id else none %}
+          {% set main_account = ([main.no, main.name]|select|join(' ')) if main else ('wie Ertragskonto' if is_credit else 'wie Aufwandkonto') %}
           {% for ln in (dec.lines or []) + [{}, {}] %}
           <tr>
             <td><input name="line_title" value="{{ ln.title or '' }}" aria-label="Text"></td>
@@ -67,7 +71,7 @@
         {% if dec.lines %}<p class="muted">Summe Positionen {{ '%.2f'|format(dec.lines|sum(attribute='amount')) }}. Betrag leeren entfernt eine Position, mit weniger als zwei Positionen wird einzeilig gebucht.</p>{% endif %}
       </fieldset>
       <label>Zahlung
-        <select name="payment_mode">
+        <select name="payment_mode" data-acc-switch data-commission-account="{{ comm_value }}">
           <option value="open" {{ 'selected' if dec.payment_mode in ('open', none) }}>offen (Kreditorenrechnung)</option>
           <option value="card" {{ 'selected' if dec.payment_mode == 'card' }}>bezahlt mit Karte</option>
           <option value="private" {{ 'selected' if dec.payment_mode == 'private' }}>bezahlt privat (Kim)</option>
